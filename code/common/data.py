@@ -14,7 +14,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from common.paths import DATA, OUT_S1, OUT_S4, ROOT
+from common.paths import DATA, SCREEN_OUT, CREDIBILITY_OUT, ROOT
 
 MEAN, STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 TRAIN_TF = transforms.Compose([
@@ -25,7 +25,7 @@ EVAL_TF = transforms.Compose([
     transforms.Resize(224), transforms.CenterCrop(224),
     transforms.ToTensor(), transforms.Normalize(MEAN, STD)])
 HAM_CLASSES = ["MEL", "NV", "BCC", "AKIEC", "BKL", "DF", "VASC"]
-TARGETS = ["ham", "ddr", "cxr"]                 # the screen's targets: cached and featurized in OUT_S1
+TARGETS = ["ham", "ddr", "cxr"]                 # the screen's targets: cached and featurized in SCREEN_OUT
 CXR_CLASSES = ["Atelectasis", "Cardiomegaly", "Effusion", "Infiltration", "Mass", "Nodule", "Pneumothorax"]
 CXR_MAX = 12000
 ISIC = DATA / "isic2018"
@@ -122,14 +122,14 @@ def target_table(t):
     raise ValueError(t)
 
 
-def cache(t, out=OUT_S1):
+def cache(t, out=SCREEN_OUT):
     """Write a screen target's index and cache to out/cache. HAM10000 reuses the pilot fine-tuning's cache if there."""
     d = out / "cache"
     d.mkdir(parents=True, exist_ok=True)
     tab = target_table(t).reset_index(drop=True)
     tab.to_csv(d / f"{t}_index.csv", index=False)
     dst = d / f"{t}_u8.npy"
-    old = ROOT / "pilot" / "out_ft" / "eval_u8.npy"           # same preprocessing, same image order
+    old = ROOT / "outputs" / "pilot_fine_tuning" / "eval_u8.npy"           # same preprocessing, same image order
     if t == "ham" and old.exists() and np.load(old, mmap_mode="r").shape[0] == len(tab):
         if not dst.exists():
             os.symlink(old, dst)
@@ -139,7 +139,7 @@ def cache(t, out=OUT_S1):
           f"{tab['group'].nunique()} groups")
 
 
-def load_target(t, out=OUT_S1):
+def load_target(t, out=SCREEN_OUT):
     tab = pd.read_csv(out / "cache" / f"{t}_index.csv")
     return tab, np.load(out / "cache" / f"{t}_u8.npy", mmap_mode="r")
 
@@ -162,7 +162,7 @@ def isic_table(t):
     raise ValueError(t)
 
 
-def cache_isic(t, out=OUT_S4):
+def cache_isic(t, out=CREDIBILITY_OUT):
     d = out / "cache"
     d.mkdir(parents=True, exist_ok=True)
     tab = isic_table(t)
@@ -172,11 +172,11 @@ def cache_isic(t, out=OUT_S4):
     print(f"{t}: cached {i} images; {extra}")
 
 
-def load_isic(t, out=OUT_S4):
+def load_isic(t, out=CREDIBILITY_OUT):
     """Any target cached outside the screen's folder (the name is historical)."""
     return pd.read_csv(out / "cache" / f"{t}_index.csv"), np.load(out / "cache" / f"{t}_u8.npy", mmap_mode="r")
 
 
-def target_dir(b, t, out1=OUT_S1, out4=OUT_S4):
+def target_dir(b, t, screen_out=SCREEN_OUT, credibility_out=CREDIBILITY_OUT):
     """Where a backbone's features and predictions on a target are kept."""
-    return (out1 / b / t) if t in TARGETS else (out4 / b / t)
+    return (screen_out / b / t) if t in TARGETS else (credibility_out / b / t)

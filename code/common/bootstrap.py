@@ -9,17 +9,18 @@ from common.data import load_isic
 from common.paths import ROOT
 
 N_BOOT = 2000
-LESIONS = ROOT / "pilot" / "out_s40" / "isic_lesions.csv"     # ISIC Archive lesion IDs of the ISIC 2018 images
+LESIONS = ROOT / "outputs" / "classifiers" / "isic_lesions.csv"     # ISIC Archive lesion IDs of the ISIC 2018 images
 
 
 class Boot:
     """yte, gidx: {split: test labels, test group index}. seeds: the training seeds, or None for a comparison without
     seeds (then only splits and test groups are resampled). splits: their order (default: yte's). Each option matches
     one of the older bootstrap variants:
-      shared  every split scores the same test set (ISIC), so one resample of its groups serves all splits (Boot40)
-      guard   a single seed or split is not inflated (Boot40); without it sqrt(n/(n-1)) divides by zero, as in S1.Boot
-      nan     "ignore": classes missing from a resample are left out of its balanced accuracy (nanmean; S1.Boot);
-              "propagate": plain mean, as pilot2's bootstrap"""
+      shared  every split scores the same test set (ISIC), so one resample of its groups serves all splits (LesionBoot)
+      guard   a single seed or split is not inflated (LesionBoot); without it sqrt(n/(n-1)) divides by zero, as in
+              screen.Boot
+      nan     "ignore": classes missing from a resample are left out of its balanced accuracy (nanmean; screen.Boot);
+              "propagate": plain mean, as the corrected pilot's bootstrap"""
 
     def __init__(self, yte, gidx, nc, seeds=None, splits=None, n_boot=N_BOOT, shared=False, guard=False,
                  nan="ignore"):

@@ -11,7 +11,7 @@ import numpy as np
 from common.backbones import last, readouts
 from common.data import cpus, load_target, n_classes
 from common.heads import balanced_acc, best_readout, fit_predict, fit_predict_arrays, readout
-from common.paths import OUT_S1, OUT_S4
+from common.paths import SCREEN_OUT, CREDIBILITY_OUT
 from common.splits import KS, make_splits
 
 
@@ -60,7 +60,7 @@ def evaluate_target(b, t, conds, ks=KS):
     """evaluate() on one of the screen's targets, with its splits, into the screen's folder."""
     tab, _ = load_target(t)
     y, g, nc = tab["y"].values, tab["group"].values, n_classes(t)
-    evaluate(b, t, conds, y, nc, make_splits(y, g, nc, ks=ks), OUT_S1 / b / t, ks)
+    evaluate(b, t, conds, y, nc, make_splits(y, g, nc, ks=ks), SCREEN_OUT / b / t, ks)
 
 
 def fit_predict_ext(Xs, ys, Xe, dims):
@@ -112,4 +112,4 @@ def external_ham(b, conds, ks=KS):
     """external() from HAM10000's shots to the ISIC 2018 test set, in the pipeline's folders."""
     tab, _ = load_target("ham")
     y, g = tab["y"].values, tab["group"].values
-    external(b, conds, OUT_S1 / b / "ham", OUT_S4 / b / "isic_test", make_splits(y, g, 7, ks=ks), y, ks)
+    external(b, conds, SCREEN_OUT / b / "ham", CREDIBILITY_OUT / b / "isic_test", make_splits(y, g, 7, ks=ks), y, ks)

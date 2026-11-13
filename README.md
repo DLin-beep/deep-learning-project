@@ -27,13 +27,17 @@ behind each finding.
 
 We kept only the main files, so that the method is easy to follow. The scripts are the main ones from our full
 codebase. They rely on smaller helper modules and cluster job scripts that are not included here, so they are for
-reading rather than running as they are.
+reading rather than running as they are. Imports such as `first_pilot`, `credibility_checks` and `classifiers` name
+those helper modules, and each script writes its results to its own folder under `outputs/`.
 
 | File | What it does |
 |---|---|
 | `METHOD.md` | Our method, step by step |
 | `DATA.md` | Every dataset and network that we used, where it comes from and its license |
-| `figures/` | The paper's four figures |
+| `figures/overview.pdf` | The study design |
+| `figures/screen.pdf` | The screen's gains, and the gain against attribute distance |
+| `figures/task.pdf` | Gains on ISIC 2018 by source and label |
+| `figures/narrow.pdf` | The gain against the number of labels, across targets, and on BSCD-FSL after fine-tuning |
 | `code/source_screen.py` | Trains each network on a source, tests it few-shot on each target, and measures the attribute distance between datasets |
 | `code/synthetic_lesions.py` | Makes the synthetic lesions and trains a network to score each lesioned image above its clean copy |
 | `code/benchmark.py` | Trains the synthetic-lesion network on COIL-100 and adapts it to the BSCD-FSL benchmark with a linear probe, LoRA or full fine-tuning |

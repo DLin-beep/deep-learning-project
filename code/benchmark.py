@@ -1,7 +1,7 @@
 """Does a start trained on synthetic lesions still help after few-shot adaptation on the BSCD-FSL benchmark?
 
-The first round trains the COIL-100 networks and runs their checks. From development on, the plan was written and
-committed before any run. DINO ViT-S/16 throughout.
+The synthetic-lesion training covers the COIL-100 networks and their checks. From development on, the plan was written
+and committed before any run. DINO ViT-S/16 throughout.
   plain   ImageNet DINO (the condition "imagenet")
   ours    plain trained further on synthetic lesion pairs made from COIL-100 views only (pairs_coil_s0-5). It uses the
           pointing experiment's lesion generator v1 and pair loss (synthetic_lesions.py) with the paper's recipe: blocks
@@ -11,20 +11,21 @@ Methods, all under fp16 autocast on the GPU:
   lp      logistic regression on frozen features
   lora    rank-r adapters on the query and value projections, with the head from lp
   ft      full fine-tuning of the last 2 or 6 blocks with the final norm, or of every parameter, with the head from lp
-Protocol A is BSCD-FSL's 5-way 1- and 5-shot episodes (15 queries, 600 per target and shot) on ISIC, ChestX, EuroSAT
-and CropDisease. Development runs on plain only, on episodes of PAD-UFES-20 (skin, for ISIC) and of CUB and Places
-(general, for the other targets). Ours runs with plain's choices. Nothing is tuned or chosen on a target.
+The benchmark episodes are BSCD-FSL's 5-way 1- and 5-shot episodes (15 queries, 600 per target and shot) on ISIC,
+ChestX, EuroSAT and CropDisease. Development runs on plain only, on episodes of PAD-UFES-20 (skin, for ISIC) and of CUB
+and Places (general, for the other targets). Ours runs with plain's choices. Nothing is tuned or chosen on a target.
 PAD-UFES-20 is never reported as a result. The go/no-go check compares plain and ours under full fine-tuning, on 600
 new 5-shot episodes each of PAD-UFES-20 and CUB. The final grid runs once, with full fine-tuning as the headline
-method. The fourth method, REAP's source stage and frozen test, runs in a separate REAP script in our full codebase. Protocol C, the paper's
-linear-probe tests, runs only in the first round.
+method. The fourth method, REAP's source stage and frozen test, runs in a separate REAP script in our full codebase. The
+paper's linear-probe tests run only with the synthetic-lesion training.
 Steps, each run as its own SLURM job:
-  First round
+  Synthetic-lesion training
   make --task s        seed s's synthetic lesions on COIL-100 views (CPU; s in 0-5)
   train --task s       seed s's network, then the learnt check on held-out pairs (GPU)
-  features --task i    one network's features on protocol C's tests (GPU; 0 plain, 1-6 ours)
-  evaluate --task i    one network's linear probe on protocol C's tests, as in the paper (CPU)
-  check                ours against the leaves + COIL-100 network on HAM10000 validation -> part1_check.json (CPU)
+  features --task i    one network's features on the paper's linear-probe tests (GPU; 0 plain, 1-6 ours)
+  evaluate --task i    one network's linear probe on the paper's linear-probe tests (CPU)
+  check                ours against the leaves + COIL-100 network on HAM10000 validation -> synthetic_lesion_check.json
+                       (CPU)
   Adaptation
   data --task i        one dataset's table, fixed episodes (and the go/no-go check's), 257-px images (CPU; DATA_STEPS)
   crop_check           CropDisease's download against BSCD-FSL's definition -> data/cropdisease_check.json (CPU)
@@ -34,10 +35,11 @@ Steps, each run as its own SLURM job:
   gonogo --task i      one network x go/no-go domain: full fine-tuning as chosen, on its own episodes (GPU; GNG_TASKS)
   gonogo_summary       -> gonogo.csv and gonogo.txt (CPU)
   final_a --task i     one network x target x shot: lp, lora and ft as chosen (GPU; FINAL_A_TASKS)
-  summarize            -> protocol_a.csv, leaderboard.csv (against docs/leaderboard.md), verdict.json and summary.txt,
-                       with REAP's rows from reap/reap.csv once the REAP script has written it (CPU)
-Checkpoints, features and predictions on HAM10000, DDR and ISIC go where the pipeline keeps them (S1.OUT, S4.OUT).
-Everything else goes to pilot/out_s46. E16_QUICK=1 runs a smoke test into pilot/out_s46/quick.
+  summarize            -> benchmark_results.csv, leaderboard.csv (against docs/leaderboard.md), verdict.json and
+                       summary.txt, with REAP's rows from reap/reap.csv once the REAP script has written it (CPU)
+Checkpoints, features and predictions on HAM10000, DDR and ISIC go where the pipeline keeps them (screen.OUT,
+credibility.OUT). Everything else goes to outputs/benchmark. BENCHMARK_QUICK=1 runs a smoke test into
+outputs/benchmark/quick.
 """
 import argparse
 import copy
@@ -62,18 +64,18 @@ _PILOT = Path(__file__).resolve().parents[1]
 for _d in ([_PILOT.parent] + sorted((_PILOT.parent / "archive" / "paper-v1").glob("[1-9]_*"))
            + [_PILOT / "10_classifiers", _PILOT / "15_pointing"]):
     sys.path.insert(0, str(_d))                  # common/, the paper's nine experiments, then 10 and 15
-QUICK = os.environ.get("E16_QUICK") == "1"
-import e1_pilot as P        # noqa: E402
-import e1_pilot2 as Q       # noqa: E402
-import source_screen as S1  # noqa: E402
-import e2_credibility as S4      # noqa: E402
-import e4_pilot_finetune as FT   # noqa: E402  (Head, fit_head, augment, the recipe's constants, gpu_setup)
-import e4_finetune_all as S2     # noqa: E402  (Net, chosen_readout)
-import e10_classifiers as E10    # noqa: E402  (code_version, save, target, isic_units)
-import synthetic_lesions as E15  # noqa: E402  (the lesion generator, PairSet, Heads, step_loss, the reserved images,
-#                                              other_splits, Boot45, t_interval, level)
+QUICK = os.environ.get("BENCHMARK_QUICK") == "1"
+import first_pilot as pilot  # noqa: E402
+import corrected_pilot  # noqa: E402
+import source_screen as screen  # noqa: E402
+import credibility_checks as credibility  # noqa: E402
+import pilot_fine_tuning  # noqa: E402  (Head, fit_head, augment, the recipe's constants, gpu_setup)
+import fine_tuning  # noqa: E402  (Net, chosen_readout)
+import classifiers  # noqa: E402  (code_version, save, target, isic_units)
+import synthetic_lesions as lesions  # noqa: E402  (the lesion generator, PairSet, Heads, step_loss, the reserved
+#                                                  images, other_splits, LesionBootWithDraws, t_interval, level)
 
-OUT = P.ROOT / "pilot" / "out_s46" / ("quick" if QUICK else "")
+OUT = pilot.ROOT / "outputs" / "benchmark" / ("quick" if QUICK else "")
 B = "vits_dino"
 FAM, P2 = "pairs_coil", "pairs_synth"          # ours, and the pointing experiment's leaves + COIL-100 network
 SEEDS, DEV_SEEDS = [0, 1, 2, 3, 4, 5], [0, 1, 2]
@@ -81,13 +83,13 @@ NETS = ["imagenet"] + [f"{FAM}_s{s}" for s in SEEDS]
 TESTS_C = ["ham", "isic_test", "ddr", "hyperkvasir6"]
 N_COIL = 16 if QUICK else 2700                 # 27 views of each of the 100 objects
 SYNTH_SEED = 50                                # seed s's lesions and fills are drawn with SYNTH_SEED + s
-STEPS = 2 if QUICK else E15.STEPS              # 840
-BATCH_PAIRS = 8 if QUICK else E15.BATCH_PAIRS  # 32 pairs, 64 images
-LEARNT, CHECK_GAP = E15.LEARNT, 1.0            # 0.75 held-out pair accuracy, and HAM10000 validation within 1.0 point
-#                                                of the leaves + COIL-100 network
-CKPT = OUT / "ckpt" if QUICK else S1.OUT / B / "ckpt"
+STEPS = 2 if QUICK else lesions.STEPS              # 840
+BATCH_PAIRS = 8 if QUICK else lesions.BATCH_PAIRS  # 32 pairs, 64 images
+LEARNT, CHECK_GAP = lesions.LEARNT, 1.0            # 0.75 held-out pair accuracy, and HAM10000 validation within
+#                                                    1.0 point of the leaves + COIL-100 network
+CKPT = OUT / "ckpt" if QUICK else screen.OUT / B / "ckpt"
 
-# protocol A and its development domains
+# the benchmark episodes and their development domains
 DATA_A = ["isic", "chestx", "eurosat", "cropdisease"]
 DATA_DEV = ["cub", "places", "pad"]            # development only, never reported as a result
 DATASETS = DATA_A + DATA_DEV                   # an episode set's seed depends on the dataset's place here
@@ -101,7 +103,7 @@ N_EPISODES = {**dict.fromkeys(DATA_A, 3 if QUICK else 600), **dict.fromkeys(DATA
 GNG_DOMAINS, GNG_SHOT, N_GNG = ["pad", "cub"], 5, 3 if QUICK else 600   # the go/no-go check's own episodes
 SQUARE, CROP = 257, 224                        # BSCD-FSL's test transform: square resize to 257, centre crop 224
 OFF = int(round((SQUARE - CROP) / 2))          # 16, where torchvision's CenterCrop puts it
-N_NCT = 500                                    # NCT-CRC-HE-100K patches per class (first round)
+N_NCT = 500                                    # NCT-CRC-HE-100K patches per class (synthetic-lesion training)
 DATA_OUT = OUT / "data"
 BLOCKS = (2, 6, 12)                            # full fine-tuning trains the last 2 or 6 blocks, or every parameter
 FT_GRID = ([dict(lr=1e-2, steps=2, blocks=b) for b in (2, 12)] if QUICK else
@@ -117,10 +119,10 @@ FINAL_A_TASKS = [("imagenet", "isic", 5)] if QUICK else [(c, n, s) for c in NETS
 HEADLINE = "ft"                                # the method behind the headline number, fixed before the final grid
 
 REAP, REAP_H, REAP_1 = 55.28, 0.24, 38.67      # the number to beat (docs/leaderboard.md), its half-width, and 1-shot
-LEADERBOARD = P.ROOT / "docs" / "leaderboard.md"
+LEADERBOARD = pilot.ROOT / "docs" / "leaderboard.md"
 LB_NAMES = {"ChestX": "chestx", "ISIC": "isic", "EuroSAT": "eurosat", "CropDisease": "cropdisease"}
 CONFIG = dict(quick=QUICK, backbone=B, family=FAM, seeds=SEEDS, dev_seeds=DEV_SEEDS, n_coil=N_COIL,
-              synth_seed=SYNTH_SEED, steps=STEPS, batch_pairs=BATCH_PAIRS, lr=P.LR, learnt=LEARNT,
+              synth_seed=SYNTH_SEED, steps=STEPS, batch_pairs=BATCH_PAIRS, lr=pilot.LR, learnt=LEARNT,
               check_gap=CHECK_GAP, tests_c=TESTS_C, data_a=DATA_A, data_dev=DATA_DEV, groups=GROUPS, shots=SHOTS,
               ways=WAYS, queries=QUERIES, n_episodes=N_EPISODES, gonogo=dict(domains=GNG_DOMAINS, shot=GNG_SHOT, n=N_GNG),
               square=SQUARE, crop=CROP, n_nct=N_NCT, ft_grid=FT_GRID, lora_grid=LORA_GRID, headline=HEADLINE,
@@ -142,8 +144,8 @@ def manifest(step, task=None, **extra):
             versions[p] = metadata.version(p)
         except metadata.PackageNotFoundError:
             versions[p] = None
-    m = dict(step=step, task=task, code_version=E10.code_version(), script_sha256=sha256(__file__),
-             screen_sha256=sha256(S1.__file__), config=CONFIG, python=platform.python_version(), packages=versions,
+    m = dict(step=step, task=task, code_version=classifiers.code_version(), script_sha256=sha256(__file__),
+             screen_sha256=sha256(screen.__file__), config=CONFIG, python=platform.python_version(), packages=versions,
              host=platform.node(), gpu=torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
              slurm_job=os.environ.get("SLURM_JOB_ID"), slurm_array_task=os.environ.get("SLURM_ARRAY_TASK_ID"),
              finished=time.strftime("%Y-%m-%d %H:%M:%S"), **extra)
@@ -157,19 +159,20 @@ def kind(c):
     return "plain" if c == "imagenet" else "ours"
 
 
-# ---------------------------------------------------------------- first round: synthetic pairs on COIL-100 views
+# ---------------------------------------------------------------- synthetic-lesion training on COIL-100 views
 def coil_bases(seed):
     """A seed's clean COIL-100 views, spread as evenly over the 100 objects as the unreserved views allow (27 each).
     Views the pointing experiment reserves (its probe set and learnt check) are never drawn."""
-    rng, C = random.Random(seed), E15.coil_files()
-    view = {o: E15.unreserved(C[o]) for o in sorted(C)}
-    cnt = E15.quota({o: len(v) for o, v in view.items()}, N_COIL, rng)
+    rng, C = random.Random(seed), lesions.coil_files()
+    view = {o: lesions.unreserved(C[o]) for o in sorted(C)}
+    cnt = lesions.quota({o: len(v) for o, v in view.items()}, N_COIL, rng)
     return [(f, "coil") for o in view for f in rng.sample(view[o], cnt[o])]
 
 
 def synth_set(name, bases, seed):
-    """Lesioned copies of `bases` [(path, kind)] -> out_s46/synth/<name>/ (NNNN.png, NNNN_mask.png, index.csv). Each
-    lesion is filled from another of the bases. The same as E15.synth_set, but in this experiment's folder."""
+    """Lesioned copies of `bases` [(path, kind)] -> outputs/benchmark/synth/<name>/ (NNNN.png, NNNN_mask.png,
+    index.csv). Each lesion is filled from another of the bases. The same as lesions.synth_set, but in this experiment's
+    folder."""
     d = OUT / "synth" / name
     if (d / "index.csv").exists():
         print("exists:", d); return
@@ -183,9 +186,9 @@ def synth_set(name, bases, seed):
             o = files[rng.randrange(len(files))]
         others.append(o)
     jobs = [(f, o, str(d / f"{i:04d}.png"), seed * 100000 + i) for i, (f, o) in enumerate(zip(files, others))]
-    with Pool(S1.cpus()) as pool:
-        recs = pool.map(E15._lesion_job, jobs, chunksize=8)
-    df = pd.DataFrame([dict(i=i, base=f, kind=k, other=o, lesioned=j[2], mask=E15.mask_path(j[2]), **r)
+    with Pool(screen.cpus()) as pool:
+        recs = pool.map(lesions._lesion_job, jobs, chunksize=8)
+    df = pd.DataFrame([dict(i=i, base=f, kind=k, other=o, lesioned=j[2], mask=lesions.mask_path(j[2]), **r)
                        for i, ((f, k), o, j, r) in enumerate(zip(bases, others, jobs, recs))])
     df.to_csv(d / "index.tmp.csv", index=False)
     os.replace(d / "index.tmp.csv", d / "index.csv")
@@ -193,7 +196,7 @@ def synth_set(name, bases, seed):
     print(f"{name}: {len(df)} lesions; lesion share of the object median {share.median():.3f} "
           f"[{share.quantile(0.05):.3f}, {share.quantile(0.95):.3f}]; below 16 px: {(df.lesion_px < 16).sum()}",
           flush=True)
-    E15.sheet(df.head(12), OUT / "sheets" / f"lesions_{name}.jpg")
+    lesions.sheet(df.head(12), OUT / "sheets" / f"lesions_{name}.jpg")
 
 
 def make(task):
@@ -208,40 +211,40 @@ def learnt(m, heads, dev):
     """Held-out pair accuracy on the pointing experiment's 200 reserved synthetic pairs (100 on leaves, 100 on
     COIL-100 views), and on the 100 on COIL-100 views alone. These pairs are scored only, never trained on."""
     m.eval(), heads.eval()
-    H, out = E15.held_sets(), {}
+    H, out = lesions.held_sets(), {}
     for name in ("synthetic", "coil"):
         pairs = H[name]
-        sa = E15.scores(m, heads, [p["normal"] for p in pairs], dev)
-        sb = E15.scores(m, heads, [p["abnormal"] for p in pairs], dev)
+        sa = lesions.scores(m, heads, [p["normal"] for p in pairs], dev)
+        sb = lesions.scores(m, heads, [p["abnormal"] for p in pairs], dev)
         out[name] = float((sb > sa).mean())
     print("held-out pair accuracy:", {k: round(v, 3) for k, v in out.items()}, flush=True)
     return out
 
 
 def train(task):
-    """The pointing experiment's training loop with the pair loss alone. E15.train would give a family it doesn't know
-    a source head."""
+    """The pointing experiment's training loop with the pair loss alone. lesions.train would give a family it doesn't
+    know a source head."""
     seed = SEEDS[task]
     ck = CKPT / f"{FAM}_s{seed}.pt"
     if ck.exists():
         print("exists:", ck); return
     t0 = time.time()
-    P.seed_all(seed)
+    pilot.seed_all(seed)
     S = pd.read_csv(OUT / "synth" / f"c{seed}" / "index.csv")
     pairs = [dict(normal=r.base, abnormal=r.lesioned, mask=r.mask, source=2) for r in S.itertuples()]
-    dl = torch.utils.data.DataLoader(E15.PairSet(pairs), batch_size=BATCH_PAIRS, shuffle=True, drop_last=True,
-                                     num_workers=min(6, S1.cpus()), persistent_workers=True)
+    dl = torch.utils.data.DataLoader(lesions.PairSet(pairs), batch_size=BATCH_PAIRS, shuffle=True, drop_last=True,
+                                     num_workers=min(6, screen.cpus()), persistent_workers=True)
     assert QUICK or (len(pairs) == 2700 and len(dl) == 84), (len(pairs), len(dl))
     print(f"{FAM} seed {seed}: {len(pairs)} pairs on COIL-100 views, pair loss", flush=True)
-    dev = P.device()
-    m = S1.imagenet_model(B)
-    trainable = tuple(f"blocks.{i}." for i in Q.VIT_TRAINED) + ("norm.",)
+    dev = pilot.device()
+    m = screen.imagenet_model(B)
+    trainable = tuple(f"blocks.{i}." for i in corrected_pilot.VIT_TRAINED) + ("norm.",)
     for n_, p in m.named_parameters():
         p.requires_grad = n_.startswith(trainable)
-    heads = E15.Heads()
+    heads = lesions.Heads()
     m.to(dev), heads.to(dev)
     params = [p for p in m.parameters() if p.requires_grad] + list(heads.parameters())
-    opt = torch.optim.SGD(params, lr=P.LR, momentum=0.9, weight_decay=0.0)
+    opt = torch.optim.SGD(params, lr=pilot.LR, momentum=0.9, weight_decay=0.0)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, STEPS)
     log, done = [], 0
     while done < STEPS:
@@ -250,7 +253,7 @@ def train(task):
         for batch in dl:
             if done == STEPS:
                 break
-            loss, h_, n_ = E15.step_loss(m, heads, batch, "pair", 0.0, dev)
+            loss, h_, n_ = lesions.step_loss(m, heads, batch, "pair", 0.0, dev)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 1.0)
@@ -264,75 +267,76 @@ def train(task):
     for d in (ck.parent, heads_dir):
         d.mkdir(parents=True, exist_ok=True)
     torch.save(heads.state_dict(), heads_dir / f"{ck.stem}.pt")
-    json.dump(dict(backbone=B, source=FAM, seed=seed, n=2 * len(pairs), pairs=len(pairs), steps=STEPS, lr=P.LR,
+    json.dump(dict(backbone=B, source=FAM, seed=seed, n=2 * len(pairs), pairs=len(pairs), steps=STEPS, lr=pilot.LR,
                    objective=dict(loss="pair", patch=False, source=False, adversarial=False), log=log,
                    heldout_pair_acc=held, sec=round(time.time() - t0)), open(ck.with_suffix(".json"), "w"), indent=1)
     tmp = ck.with_suffix(".tmp")
-    torch.save({k: v.cpu() for k, v in m.state_dict().items() if not k.startswith("head.")}, tmp)   # as S1.train
+    torch.save({k: v.cpu() for k, v in m.state_dict().items() if not k.startswith("head.")}, tmp)   # as screen.train
     os.replace(tmp, ck)
-    if QUICK:                                      # the checkpoint loads the way S1.build loads one
-        m2 = S1.imagenet_model(B)
+    if QUICK:                                      # the checkpoint loads the way screen.build loads one
+        m2 = screen.imagenet_model(B)
         missing, unexpected = m2.load_state_dict(torch.load(ck, map_location="cpu"), strict=False)
-        assert not unexpected and set(missing) == S1.head_keys(B), (missing, unexpected)
+        assert not unexpected and set(missing) == screen.head_keys(B), (missing, unexpected)
         print("quick: the checkpoint loads, with only the head keys missing", flush=True)
     manifest("train", task, network=ck.stem, heldout_pair_acc=held, seconds=round(time.time() - t0))
 
 
-# ---------------------------------------------------------------- protocol C's linear probe (the paper's protocol)
+# ---------------------------------------------------------------- the paper's linear-probe tests
 def features(task):
     c = NETS[task]
     t0 = time.time()
     for t in TESTS_C:                                  # existing files are kept (plain's, mostly)
-        S4.extract_conditions(B, t, [c])
+        credibility.extract_conditions(B, t, [c])
     print(f"{c}: features in {time.time() - t0:.0f}s", flush=True)
     manifest("features", task, network=c, seconds=round(time.time() - t0))
 
 
 def preds_path(t, c):
     """The path of network c's predictions on t. HAM10000's and DDR's are where the pipeline keeps them, and
-    HyperKvasir's are in pilot/out_s46, even in a smoke test."""
-    return (S1.OUT / B if t in S1.TARGETS else P.ROOT / "pilot" / "out_s46" / B) / t / f"preds_{c}.npz"
+    HyperKvasir's are in outputs/benchmark, even in a smoke test."""
+    return (screen.OUT / B if t in screen.TARGETS else pilot.ROOT / "outputs" / "benchmark" / B) / t / f"preds_{c}.npz"
 
 
 def evaluate_other(t, cs):
-    """S4.evaluate_conditions for HyperKvasir (k = 5 and 20), saved in out_s46 with the validation accuracies."""
+    """credibility.evaluate_conditions for HyperKvasir (k = 5 and 20), saved in outputs/benchmark with the validation
+    accuracies."""
     from joblib import Parallel, delayed
-    y, _, nc, splits = E15.other_splits(t)
+    y, _, nc, splits = lesions.other_splits(t)
     todo = [c for c in cs if not preds_path(t, c).exists()]
-    jobs = [(c, r) for c in todo for r in S1.readouts(B)]
-    out = Parallel(n_jobs=S1.cpus(), verbose=1)(
-        delayed(S1._eval_job)(S4.target_dir(B, t) / f"feats_{c}.npz", B, c, r, splits, y, nc, E15.OTHER_KS)
+    jobs = [(c, r) for c in todo for r in screen.readouts(B)]
+    out = Parallel(n_jobs=screen.cpus(), verbose=1)(
+        delayed(screen._eval_job)(credibility.target_dir(B, t) / f"feats_{c}.npz", B, c, r, splits, y, nc, lesions.OTHER_KS)
         for c, r in jobs)
     per = {}
     for c, res in out:
         per.setdefault(c, {}).update(res)
     for c, res in per.items():
-        for sp in S1.SPLITS:
+        for sp in screen.SPLITS:
             res[f"split|{sp}|te"] = splits[sp]["te"]
-        E10.save(preds_path(t, c), res)
+        classifiers.save(preds_path(t, c), res)
 
 
 def evaluate(task):
     c = NETS[task]
     t0 = time.time()
     for t in ("ham", "ddr"):
-        S4.evaluate_conditions(B, t, [c])
-    S4.external(B, [c])                                # ISIC 2018 test, from the HAM10000 shots
+        credibility.evaluate_conditions(B, t, [c])
+    credibility.external(B, [c])                                # ISIC 2018 test, from the HAM10000 shots
     evaluate_other("hyperkvasir6", [c])
     manifest("evaluate", task, network=c, seconds=round(time.time() - t0))
 
 
-# ---------------------------------------------------------------- the first round's check
+# ---------------------------------------------------------------- the synthetic-lesion check
 def val_mean(c):
     """Mean HAM10000 validation balanced accuracy (%) over splits and k, at the readout the paper's rule picks for each
     split and k (the best mean over the 20 draws)."""
-    S = np.load(S1.OUT / B / "ham" / f"preds_{c}.npz")
-    return 100 * float(np.mean([max(S[f"{r}|{sp}|{k}|val_ba"].mean() for r in S1.readouts(B))
-                                for sp in S1.SPLITS for k in S1.KS]))
+    S = np.load(screen.OUT / B / "ham" / f"preds_{c}.npz")
+    return 100 * float(np.mean([max(S[f"{r}|{sp}|{k}|val_ba"].mean() for r in screen.readouts(B))
+                                for sp in screen.SPLITS for k in screen.KS]))
 
 
 def check():
-    """The first round's check. Ours must come within CHECK_GAP of the leaves + COIL-100 network on HAM10000
+    """The synthetic-lesion check. Ours must come within CHECK_GAP of the leaves + COIL-100 network on HAM10000
     validation (mean over k and seeds 0-2), and every seed must pass the learnt check. Otherwise the job chain stops.
     The smoke test scores the leaves + COIL-100 network against itself, only to run the code."""
     fam = P2 if QUICK else FAM
@@ -345,14 +349,14 @@ def check():
                p2_mean=float(np.mean(list(p2.values()))), gap=gap, gap_ok=gap >= -CHECK_GAP, heldout_pair_acc=held,
                learnt_ok=learnt_ok, passes=bool(gap >= -CHECK_GAP and learnt_ok))
     OUT.mkdir(parents=True, exist_ok=True)
-    json.dump(res, open(OUT / "part1_check.json", "w"), indent=1)
+    json.dump(res, open(OUT / "synthetic_lesion_check.json", "w"), indent=1)
     print(json.dumps(res, indent=1), flush=True)
     manifest("check", passes=res["passes"])
     if not res["passes"]:
-        raise SystemExit("The first round's check failed (see part1_check.json)")
+        raise SystemExit("The synthetic-lesion check failed (see synthetic_lesion_check.json)")
 
 
-# ---------------------------------------------------------------- protocol A and the development domains: data
+# ---------------------------------------------------------------- the data of the benchmark and development domains
 def table(name):
     """(path, y) and the class names of a dataset. BSCD-FSL's targets are read as its loaders read them:
       isic          the 10,015 ISIC 2018 Task 3 training images
@@ -363,10 +367,10 @@ def table(name):
       cub           CUB-200-2011's 11,788 images
       places        Places365's 36,500 validation images (256 px)
       pad           PAD-UFES-20's 2,298 photos of 6 diagnoses, with a group column for their 1,891 lesions
-    nct, from the first round's plan, is 500 NCT-CRC-HE-100K patches per class."""
-    D = P.DATA
+    nct, as in the synthetic-lesion training, is 500 NCT-CRC-HE-100K patches per class."""
+    D = pilot.DATA
     if name == "isic":
-        return S1.target_table("ham")[["path", "y"]].reset_index(drop=True), list(P.HAM_CLASSES)
+        return screen.target_table("ham")[["path", "y"]].reset_index(drop=True), list(pilot.HAM_CLASSES)
     if name == "pad":
         raw = D / "pad_ufes20" / "raw"
         meta = pd.read_csv(next(raw.rglob("metadata.csv")))
@@ -379,10 +383,10 @@ def table(name):
                                   y=[classes.index(c) for c in meta.diagnostic], group=lesion.values)), classes)
     if name == "chestx":
         d = pd.read_csv(D / "cxr" / "Data_Entry_2017_v2020.csv")
-        d = d[d["Finding Labels"].isin(S1.CXR_CLASSES)]
+        d = d[d["Finding Labels"].isin(screen.CXR_CLASSES)]
         d = d[[(D / "cxr" / "images" / f).exists() for f in d["Image Index"]]].sort_values("Image Index")
         return (pd.DataFrame(dict(path=[str(D / "cxr" / "images" / f) for f in d["Image Index"]],
-                                  y=[S1.CXR_CLASSES.index(f) for f in d["Finding Labels"]])), list(S1.CXR_CLASSES))
+                                  y=[screen.CXR_CLASSES.index(f) for f in d["Finding Labels"]])), list(screen.CXR_CLASSES))
     if name == "places":
         root = D / "places365"
         lab = pd.read_csv(root / "places365_val.txt", sep=" ", header=None, names=["file", "y"])
@@ -396,9 +400,9 @@ def table(name):
     if not root.is_dir():
         raise SystemExit(f"{name}: {root} is missing" + (" (BSCD-FSL's CropDisease, the Kaggle download of "
                                                          "saroz014/plant-disease)" if name == "cropdisease" else ""))
-    classes = S1._class_dirs(root)
+    classes = screen._class_dirs(root)
     df = pd.DataFrame([(str(p), i) for i, c in enumerate(classes) for p in sorted((root / c).iterdir())
-                       if p.suffix.lower() in S1.IMG_EXTS], columns=["path", "y"])
+                       if p.suffix.lower() in screen.IMG_EXTS], columns=["path", "y"])
     if name == "nct":
         rng = np.random.RandomState(0)
         df = pd.concat([g.iloc[np.sort(rng.choice(len(g), N_NCT, replace=False))] for _, g in df.groupby("y")])
@@ -409,8 +413,8 @@ def draw_episodes(y, n, shot, seed, groups=None):
     """n episodes. Each takes WAYS classes among those with at least shot + QUERIES images, then shot + QUERIES images
     of each, without replacement. With groups (PAD-UFES-20's lesions), a class needs shot + QUERIES groups and each
     image comes from a different one, so the support set and the queries never share a lesion. Without groups, the
-    draws are the same as the first round's. Returns the classes (n x WAYS), and the support (n x WAYS x shot) and
-    query (n x WAYS x QUERIES) row indices."""
+    draws are the same as in the synthetic-lesion training. Returns the classes (n x WAYS), and the support (n x WAYS x
+    shot) and query (n x WAYS x QUERIES) row indices."""
     rng = np.random.RandomState(seed)
     size = (lambda c: (y == c).sum()) if groups is None else (lambda c: len(np.unique(groups[y == c])))
     ok = [c for c in np.unique(y) if size(c) >= shot + QUERIES]
@@ -471,7 +475,7 @@ def data(task):
     if not (dst.exists() and np.load(dst, mmap_mode="r").shape[0] == len(rows)):
         tmp = DATA_OUT / f"{name}_u8.tmp.npy"
         arr = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.uint8, shape=(len(rows), 3, SQUARE, SQUARE))
-        with Pool(S1.cpus()) as pool:
+        with Pool(screen.cpus()) as pool:
             for i, a in enumerate(pool.imap(_square, tab["path"].values[rows], chunksize=32)):
                 arr[i] = a
         arr.flush()
@@ -488,11 +492,11 @@ def crop_check():
     """CropDisease's Kaggle download against BSCD-FSL's definition. BSCD-FSL's loader reads dataset/train with
     ImageFolder, which gives 38 classes and 43,456 images. Writes data/cropdisease_check.json with every class's count,
     and exits on a mismatch."""
-    root = P.DATA / "cropdisease" / "dataset" / "train"
+    root = pilot.DATA / "cropdisease" / "dataset" / "train"
     if not root.is_dir():
         raise SystemExit(f"{root} is missing (the Kaggle download of saroz014/plant-disease)")
-    classes = S1._class_dirs(root)
-    counts = {c: sum(p.suffix.lower() in S1.IMG_EXTS for p in (root / c).iterdir()) for c in classes}
+    classes = screen._class_dirs(root)
+    counts = {c: sum(p.suffix.lower() in screen.IMG_EXTS for p in (root / c).iterdir()) for c in classes}
     res = dict(root=str(root), n_classes=len(classes), n_images=sum(counts.values()),
                expected=dict(n_classes=38, n_images=43456), counts=counts)
     res["matches"] = (res["n_classes"], res["n_images"]) == (38, 43456)
@@ -561,17 +565,18 @@ def amp(dev):
 
 
 def center(u8):
-    """Protocol A's evaluation input: the centre 224 px of SQUARE-px uint8 images on the device, ImageNet-normalized."""
+    """The benchmark episodes' evaluation input: the centre 224 px of SQUARE-px uint8 images on the device,
+    ImageNet-normalized."""
     x = u8[:, :, OFF:OFF + CROP, OFF:OFF + CROP].float().div_(255)
-    return (x - FT.MEAN.to(x.device)) / FT.STD.to(x.device)
+    return (x - pilot_fine_tuning.MEAN.to(x.device)) / pilot_fine_tuning.STD.to(x.device)
 
 
 @torch.no_grad()
 def cls_feats(m, x, bs=128):
-    """The CLS token after the final norm (S1.stage_features' "cls"), as float32 numpy."""
+    """The CLS token after the final norm (screen.stage_features' "cls"), as float32 numpy."""
     m.eval()
     with amp(x.device):
-        return torch.cat([S1.stage_features(B, m, x[s:s + bs])["cls"].float() for s in range(0, len(x), bs)]).cpu().numpy()
+        return torch.cat([screen.stage_features(B, m, x[s:s + bs])["cls"].float() for s in range(0, len(x), bs)]).cpu().numpy()
 
 
 @torch.no_grad()
@@ -589,7 +594,7 @@ def predict_u8(net, images, idx, dev, bs=256):
     for s in range(0, len(idx), bs):
         x = torch.from_numpy(np.array(images[idx[s:s + bs]])).to(dev).float().div_(255)
         with amp(dev):
-            out.append(net((x - FT.MEAN.to(dev)) / FT.STD.to(dev)).float().argmax(1).cpu())
+            out.append(net((x - pilot_fine_tuning.MEAN.to(dev)) / pilot_fine_tuning.STD.to(dev)).float().argmax(1).cpu())
     return torch.cat(out).numpy().astype(np.int8)
 
 
@@ -613,11 +618,12 @@ def method_params(net, m, cfg, seed):
 
 
 def adapt(net, params, batches, steps, lr, dev):
-    """The paper's fine-tuning loop (FT.finetune), under fp16 autocast with loss scaling. SGD with momentum 0.9 and
-    weight decay 1e-4, cosine over `steps`, gradient clipping at 1. batches() returns one batch (x, y) on the device."""
+    """The paper's fine-tuning loop (pilot_fine_tuning.finetune), under fp16 autocast with loss scaling. SGD with
+    momentum 0.9 and weight decay 1e-4, cosine over `steps`, gradient clipping at 1. batches() returns one batch (x, y)
+    on the device."""
     if steps == 0:
         return
-    opt = torch.optim.SGD(params, lr=lr, momentum=FT.MOMENTUM, weight_decay=FT.WD)
+    opt = torch.optim.SGD(params, lr=lr, momentum=pilot_fine_tuning.MOMENTUM, weight_decay=pilot_fine_tuning.WD)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     scaler = torch.amp.GradScaler("cuda", init_scale=2.0 ** 10, enabled=dev.type == "cuda")   # short runs: few skips
     lossf = nn.CrossEntropyLoss()
@@ -631,19 +637,19 @@ def adapt(net, params, batches, steps, lr, dev):
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(params, FT.CLIP)
+        torch.nn.utils.clip_grad_norm_(params, pilot_fine_tuning.CLIP)
         scaler.step(opt)
         scaler.update()
         sched.step()
 
 
 def augment_all(u8, dev):
-    """FT.augment on every support image, in order: a random resized crop (scale 0.5-1, ratio 3/4-4/3) to 224 px and a
-    flip with probability 0.5, from the global torch generator."""
-    return FT.augment(list(u8), torch.arange(len(u8)), dev)
+    """pilot_fine_tuning.augment on every support image, in order: a random resized crop (scale 0.5-1, ratio 3/4-4/3) to
+    224 px and a flip with probability 0.5, from the global torch generator."""
+    return pilot_fine_tuning.augment(list(u8), torch.arange(len(u8)), dev)
 
 
-# ---------------------------------------------------------------- protocol A: episodes
+# ---------------------------------------------------------------- the benchmark episodes
 def episode_run(c, name, shot, plan, dst, ep=""):
     """Every episode of one dataset and shot, from start c -> dst.
 
@@ -655,11 +661,11 @@ def episode_run(c, name, shot, plan, dst, ep=""):
     if dst.exists():
         print("exists:", dst); return
     t0 = time.time()
-    dev = FT.gpu_setup()
+    dev = pilot_fine_tuning.gpu_setup()
     E, pos, cache = episode_files(name)
     sup, qry = E[f"{ep}sup{shot}"], E[f"{ep}qry{shot}"]
     n = len(sup)
-    base = S1.build(B, c).to(dev).eval()
+    base = screen.build(B, c).to(dev).eval()
     labels = ["lp"] + [lab for lab, _, _ in plan]
     acc = {k: np.full(n, np.nan) for k in labels}
     div = {k: np.zeros(n, bool) for k in labels}
@@ -669,12 +675,12 @@ def episode_run(c, name, shot, plan, dst, ep=""):
         su = torch.from_numpy(np.stack([cache[pos[i]] for i in sup[e].ravel()])).to(dev)
         xq = center(torch.from_numpy(np.stack([cache[pos[i]] for i in qry[e].ravel()])).to(dev))
         Xq = cls_feats(base, xq)
-        head0 = FT.fit_head(cls_feats(base, center(su)), ys, np.arange(len(ys)), None)
+        head0 = pilot_fine_tuning.fit_head(cls_feats(base, center(su)), ys, np.arange(len(ys)), None)
         with torch.no_grad():
             acc["lp"][e] = (head0(torch.from_numpy(Xq)).argmax(1).numpy() == yq).mean()
         seed = 1_000_000 * shot + e + (500_000 if ep else 0)
         for lab, m, cfg in plan:
-            net = S2.Net(B, copy.deepcopy(base), ["cls"], copy.deepcopy(head0)).to(dev)
+            net = fine_tuning.Net(B, copy.deepcopy(base), ["cls"], copy.deepcopy(head0)).to(dev)
             params = method_params(net, m, cfg, seed)
             torch.manual_seed(seed)                    # the crops: the same for every start and configuration
             try:
@@ -686,7 +692,7 @@ def episode_run(c, name, shot, plan, dst, ep=""):
         if (e + 1) % 50 == 0 or e + 1 == n:
             print(f"{c} {name} {shot}-shot: {e + 1}/{n} episodes in {time.time() - t0:.0f}s; mean so far "
                   + ", ".join(f"{k} {100 * np.nanmean(v):.1f}" for k, v in acc.items()), flush=True)
-    E10.save(dst, {**{f"acc|{k}": v for k, v in acc.items()}, **{f"div|{k}": v for k, v in div.items()}})
+    classifiers.save(dst, {**{f"acc|{k}": v for k, v in acc.items()}, **{f"div|{k}": v for k, v in div.items()}})
 
 
 def dev_a(task):
@@ -729,20 +735,20 @@ def step0():
       - A few steps of full fine-tuning move the chosen blocks, the final norm and the head, and more only when every
         block trains.
       - No PAD-UFES-20 episode shows a lesion twice."""
-    dev = FT.gpu_setup()
+    dev = pilot_fine_tuning.gpu_setup()
     E, pos, cache = episode_files("isic")
     shot, e = 5, 0
     su = torch.from_numpy(np.stack([cache[pos[i]] for i in E[f"sup{shot}"][e].ravel()])).to(dev)
     xq = center(torch.from_numpy(np.stack([cache[pos[i]] for i in E[f"qry{shot}"][e].ravel()])).to(dev))
     ys = np.repeat(np.arange(WAYS), shot)
-    base = S1.build(B, "imagenet").to(dev).eval()
+    base = screen.build(B, "imagenet").to(dev).eval()
     nb = len(base.blocks)
-    head0 = FT.fit_head(cls_feats(base, center(su)), ys, np.arange(len(ys)), None)
+    head0 = pilot_fine_tuning.fit_head(cls_feats(base, center(su)), ys, np.arange(len(ys)), None)
     with torch.no_grad():
         lp = head0(torch.from_numpy(cls_feats(base, xq))).argmax(1).numpy()
     out = {}
     for m, cfg in [("ft", dict(lr=1e-2, steps=0, blocks=b)) for b in BLOCKS] + [("lora", dict(rank=4, lr=1e-2, steps=0))]:
-        net = S2.Net(B, copy.deepcopy(base), ["cls"], copy.deepcopy(head0)).to(dev)
+        net = fine_tuning.Net(B, copy.deepcopy(base), ["cls"], copy.deepcopy(head0)).to(dev)
         method_params(net, m, cfg, 0)
         lab = cfg_name(m, cfg)
         out[lab] = float((predict(net, xq) == lp).mean())
@@ -750,7 +756,7 @@ def step0():
         assert out[lab] >= 0.99, f"{lab} at step 0 does not reproduce the linear probe"
     ysd = torch.as_tensor(ys, device=dev)
     for m, cfg in [("lora", dict(rank=4, lr=1e-2, steps=5))] + [("ft", dict(lr=1e-2, steps=5, blocks=b)) for b in BLOCKS]:
-        net = S2.Net(B, copy.deepcopy(base), ["cls"], copy.deepcopy(head0)).to(dev)
+        net = fine_tuning.Net(B, copy.deepcopy(base), ["cls"], copy.deepcopy(head0)).to(dev)
         params = method_params(net, m, cfg, 0)
         before = {n: v.detach().clone() for n, v in net.state_dict().items()}
         torch.manual_seed(0)
@@ -809,7 +815,7 @@ def choose():
 
 def gonogo_summary():
     """gonogo.csv and gonogo.txt. For each go/no-go domain, under full fine-tuning (the check) and the linear probe
-    (for reference), they give plain's and ours' accuracy, and ours - plain paired on episodes, with protocol A's
+    (for reference), they give plain's and ours' accuracy, and ours - plain paired on episodes, with the benchmark's
     intervals. gonogo.txt also lists the measured time of every development and go/no-go job."""
     ours = ["imagenet"] if QUICK else [f"{FAM}_s{s}" for s in SEEDS]   # the smoke test: plain stands in for ours
     dv = json.load(open(OUT / "dev.json"))
@@ -848,9 +854,9 @@ def gonogo_summary():
 # ---------------------------------------------------------------- summary
 def boot_mean(D, n_boot=None):
     """Hierarchical bootstrap of the mean of D (seeds x episodes). Seeds and episodes are resampled with replacement,
-    independently (RandomState(0), Q.N_BOOT resamples). The seed effect is inflated by sqrt(n / (n - 1)), as in
-    S1.Boot."""
-    rng, n_boot = np.random.RandomState(0), n_boot or Q.N_BOOT
+    independently (RandomState(0), corrected_pilot.N_BOOT resamples). The seed effect is inflated by sqrt(n / (n - 1)),
+    as in screen.Boot."""
+    rng, n_boot = np.random.RandomState(0), n_boot or corrected_pilot.N_BOOT
     ns, ne = D.shape
     Ce = np.stack([np.bincount(r, minlength=ne) for r in rng.randint(0, ne, (n_boot, ne))]).astype(float)
     Cs = np.stack([np.bincount(r, minlength=ns) for r in rng.randint(0, ns, (n_boot, ns))]).astype(float)
@@ -870,13 +876,14 @@ def interval_a(D):
         h = 1.96 * D[0].std(ddof=1) / np.sqrt(D.shape[1])
         return mean, mean - h, mean + h, "episodes"
     lo, hi = np.percentile(boot_mean(D), [2.5, 97.5])
-    _, tlo, thi, _ = E15.t_interval(D.mean(1))
+    _, tlo, thi, _ = lesions.t_interval(D.mean(1))
     return (mean, tlo, thi, "t") if thi - tlo > hi - lo else (mean, float(lo), float(hi), "bootstrap")
 
 
 def summarize_a(ours):
-    """protocol_a.csv's rows. For each target, shot and method, they give the setting and the development domains it
-    was chosen on, plain's and ours' accuracy, and ours - plain paired on episodes, with protocol A's intervals."""
+    """benchmark_results.csv's rows. For each target, shot and method, they give the setting and the development domains
+    it was chosen on, plain's and ours' accuracy, and ours - plain paired on episodes, with the benchmark's
+    intervals."""
     dv = json.load(open(OUT / "dev.json"))
     rows = []
     for name in DATA_A:
@@ -944,12 +951,12 @@ def leaderboard(A):
 
 
 def summarize():
-    """The final grid's tables and the plan's verdicts: protocol_a.csv (every cell), leaderboard.csv, verdict.json and
-    summary.txt. summary.txt also shows REAP's source stage and frozen test from reap/reap.csv, once the REAP script has
-    written it."""
+    """The final grid's tables and the plan's verdicts: benchmark_results.csv (every cell), leaderboard.csv,
+    verdict.json and summary.txt. summary.txt also shows REAP's source stage and frozen test from reap/reap.csv, once
+    the REAP script has written it."""
     ours = ["imagenet", "imagenet"] if QUICK else [f"{FAM}_s{s}" for s in SEEDS]   # the smoke test: plain as both
     A = summarize_a(ours)
-    A.to_csv(OUT / "protocol_a.csv", index=False)
+    A.to_csv(OUT / "benchmark_results.csv", index=False)
     Lb = leaderboard(A)
     Lb.to_csv(OUT / "leaderboard.csv", index=False)
     verdict = {}
@@ -979,7 +986,7 @@ def summarize():
            f"headline's method: {HEADLINE}.",
            "", "Development choices (dev_choices.csv; on plain, never on a target):",
            fmt(pd.read_csv(OUT / "dev_choices.csv")),
-           "", "Protocol A (BSCD-FSL, 5-way, 15 queries; accuracy %; ours - plain paired on episodes):", fmt(A),
+           "", "The benchmark episodes (BSCD-FSL, 5-way, 15 queries; accuracy %; ours - plain paired on episodes):", fmt(A),
            "", f"Against docs/leaderboard.md ({HEADLINE}; gaps signed, losses included):", fmt(Lb),
            "", "REAP's source stage from plain and from ours, then its frozen test (reap/reap.csv):",
            fmt(pd.read_csv(reap)) if reap.exists() else "(not run yet)",

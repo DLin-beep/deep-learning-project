@@ -1,4 +1,4 @@
-"""The linear-map test.
+"""The linear map behind the reweighting test.
 
 A ridge map from one network's features to another's is fit without labels. The paper's few-shot protocol then runs
 on in-memory feature sets (all layers concatenated and standardized), for HAM10000 (whose shots also score the ISIC
@@ -9,7 +9,7 @@ import pandas as pd
 from common.backbones import is_vit, stages
 from common.data import cpus, load_isic, load_target, target_dir
 from common.heads import balanced_acc, fit_predict_arrays
-from common.paths import OUT_S4
+from common.paths import CREDIBILITY_OUT
 from common.splits import KS, OTHER_KS, SPLITS, make_splits
 
 INTERNAL = ["pad_ufes20", "hiba_derm", "bcn20000"]
@@ -91,7 +91,7 @@ def skin_tests(internal=INTERNAL, other_ks=OTHER_KS):
     T = {"ham": dict(y=tab.y.values, g=tab.group.values, nc=7, ks=list(KS),
                      splits=make_splits(tab.y.values, tab.group.values, 7, ks=list(KS)))}
     for t in internal:
-        tb = pd.read_csv(OUT_S4 / "cache" / f"{t}_index.csv")
+        tb = pd.read_csv(CREDIBILITY_OUT / "cache" / f"{t}_index.csv")
         nc = int(tb.y.max()) + 1
         T[t] = dict(y=tb.y.values, g=tb.group.values, nc=nc, ks=list(other_ks),
                     splits=make_splits(tb.y.values, tb.group.values, nc, ks=list(other_ks)))

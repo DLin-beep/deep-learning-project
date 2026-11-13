@@ -1,5 +1,4 @@
-# torch 2.6.0 with the CUDA 11.8 runtime, as on Longleaf's GPU partitions. The other pins are the versions the
-# cluster runs recorded in their manifests (pillow, threadpoolctl and pyarrow are not recorded there).
+# The package versions that we used, with torch 2.6.0 built for CUDA 11.8.
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch==2.6.0+cu118
 torchvision==0.21.0+cu118

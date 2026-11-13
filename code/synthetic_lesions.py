@@ -1,4 +1,5 @@
-"""Does teaching DINO ViT-S/16 to point at the anomaly make its abnormality signal sharper and less tied to plants?
+"""Do synthetic lesions teach DINO ViT-S/16 to point at the anomaly, and does that make its abnormality signal sharper
+and less tied to plants?
 
 Sharper means higher few-shot accuracy on ISIC, and less tied to plants means gains outside skin. Three tests run in
 order. The first asks whether a pair loss on matched images beats ordinary labels. The second asks whether patch-level
@@ -34,17 +35,18 @@ Steps, each run as its own SLURM job:
                      the baselines and the first two tests, 37-48 for the third)
   evaluate --task i  one network: few-shot on the five targets, plus ISIC from the HAM10000 shots (CPU)
   diagnose --task i  one network: robust-PCA localization, source decodability, linear-map retention (CPU)
-  gate               scores the first two tests and picks the third test's objective -> out_s45/gate.json (CPU)
-  summarize          -> pilot/out_s45/summary.txt (CPU)
+  gate               scores the first two tests and picks the third test's objective ->
+                     outputs/synthetic_lesions/gate.json (CPU)
+  summarize          -> outputs/synthetic_lesions/summary.txt (CPU)
 
-Checkpoints, and the features and predictions on HAM10000, DDR and ISIC, go where the pipeline keeps them (S1.OUT,
-S4.OUT) under the new condition names. The other targets' predictions, the heads, the diagnostics, the synthetic
-images, the tables and the manifests go to pilot/out_s45.
+Checkpoints, and the features and predictions on HAM10000, DDR and ISIC, go where the pipeline keeps them (screen.OUT,
+credibility.OUT) under the new condition names. The other targets' predictions, the heads, the diagnostics, the
+synthetic images, the tables and the manifests go to outputs/synthetic_lesions.
 
-E15_QUICK=1 runs a smoke test into pilot/out_s45/quick: a few images of every source, two training steps of every
-condition, 16 images of each test, the Task 1 tokens with robust PCA on 10 images, one split and two draws. Its
-scoring maps every new condition to the plant networks, so the gate and the summary run end to end on real
-predictions.
+SYNTHETIC_LESIONS_QUICK=1 runs a smoke test into outputs/synthetic_lesions/quick: a few images of every source, two
+training steps of every condition, 16 images of each test, the Task 1 tokens with robust PCA on 10 images, one split and
+two draws. Its scoring maps every new condition to the plant networks, so the gate and the summary run end to end on
+real predictions.
 """
 import argparse
 import functools
@@ -68,18 +70,19 @@ import torch.nn.functional as F
 _PILOT = Path(__file__).resolve().parents[1]
 for _d in [_PILOT.parent] + sorted((_PILOT.parent / "archive" / "paper-v1").glob("[1-9]_*")) + [_PILOT / "10_classifiers"]:
     sys.path.insert(0, str(_d))                  # common/, the paper's nine experiments, then 10_classifiers
-QUICK = os.environ.get("E15_QUICK") == "1"
+QUICK = os.environ.get("SYNTHETIC_LESIONS_QUICK") == "1"
 if QUICK:
-    os.environ["S37_QUICK"] = "1"              # the linear stand-in's helpers also run one split, two draws
-import e1_pilot as P        # noqa: E402
-import e1_pilot2 as Q       # noqa: E402
-import source_screen as S1  # noqa: E402
-import e2_credibility as S4      # noqa: E402
-import reweighting_test as E9  # noqa: E402  (Std, load, ridge, r2, skin_tests, evaluate)
-import e10_classifiers as E10    # noqa: E402  (code_version, isic_units, target, save, Boot40)
+    os.environ["REWEIGHTING_QUICK"] = "1"              # the linear stand-in's helpers also run one split, two draws
+import first_pilot as pilot  # noqa: E402
+import corrected_pilot  # noqa: E402
+import source_screen as screen  # noqa: E402
+import credibility_checks as credibility  # noqa: E402
+import reweighting_test as reweighting  # noqa: E402  (Std, load, ridge, r2, skin_tests, evaluate)
+import classifiers  # noqa: E402  (code_version, isic_units, target, save, LesionBoot)
 
-OUT = P.ROOT / "pilot" / "out_s45" / ("quick" if QUICK else "")
-S41 = P.ROOT / "pilot" / "out_s41"            # the robust-PCA test's Task 1 masks, and its scores for the smoke test
+OUT = pilot.ROOT / "outputs" / "synthetic_lesions" / ("quick" if QUICK else "")
+# The robust-PCA test's Task 1 masks, and its scores for the smoke test.
+ROBUST_PCA_OUT = pilot.ROOT / "outputs" / "robust_pca"
 B, BASE = "vits_dino", "plant_disease2"
 SEEDS = [0, 1, 2, 3, 4, 5]
 SCORE_SEEDS = [0, 1] if QUICK else SEEDS
@@ -93,15 +96,15 @@ RUNS = [(f, s) for f in FAMILIES for s in SEEDS]
 NETS = ["imagenet"] + [f"{BASE}_s{s}" for s in SEEDS] + [f"{f}_s{s}" for f, s in RUNS]
 TESTS = ["ham", "isic_test", "ddr", "hyperkvasir6", "pad_ufes20", "hiba_derm"]
 TARGETS = ["ham", "ddr", "hyperkvasir6", "pad_ufes20", "hiba_derm"]         # the five with validation splits
-OTHER = ["hyperkvasir6", "pad_ufes20", "hiba_derm"]                         # their predictions go to out_s45
+OTHER = ["hyperkvasir6", "pad_ufes20", "hiba_derm"]                         # their predictions go to OUT
 OTHER_KS = [5, 20]                             # the rarest classes allow k = 5 and 20
 LABEL = {"ham": "HAM10000", "isic_test": "ISIC 2018 test", "ddr": "DDR", "hyperkvasir6": "HyperKvasir",
          "pad_ufes20": "PAD-UFES-20", "hiba_derm": "HIBA"}
-SPLITS = S1.SPLITS[:1] if QUICK else S1.SPLITS
-DRAWS = 2 if QUICK else S1.REPEATS
-PV = P.DATA / "plantvillage" / "repo" / "raw" / "segmented"
-COIL = P.DATA / "coil100" / "coil-100"
-VISA = P.DATA / "visa256crop"
+SPLITS = screen.SPLITS[:1] if QUICK else screen.SPLITS
+DRAWS = 2 if QUICK else screen.REPEATS
+PV = pilot.DATA / "plantvillage" / "repo" / "raw" / "segmented"
+COIL = pilot.DATA / "coil100" / "coil-100"
+VISA = pilot.DATA / "visa256crop"
 VISA_MASKS = OUT / "visa_masks"
 SPECIES = ["Apple", "Cherry_(including_sour)", "Corn_(maize)", "Grape", "Peach", "Pepper,_bell", "Potato",
            "Strawberry", "Tomato"]             # the nine PlantVillage species with healthy and diseased leaves
@@ -113,18 +116,18 @@ LESION_AREA, VERTICES, RADII = (0.01, 0.20), 12, (0.6, 1.4)
 BRIGHT, CHANNEL, FEATHER = (0.6, 1.4), (0.85, 1.15), 3.0   # the colour shift, and its ramp inside the mask (px)
 KEEP, CROP_TRIES = 0.5, 10                     # a crop is redrawn until it keeps half the lesion, at most 10 tries
 PATCH_POS, PATCH_W, GRID = 0.25, 1.0, 14       # a token is positive when its 16-px patch is at least a quarter lesion
-BATCH_PAIRS = 8 if QUICK else P.BATCH // 2
-STEPS = 2 if QUICK else P.EPOCHS * 84          # 840: 10 epochs of 84 batches of 64 images, as in the paper's runs
+BATCH_PAIRS = 8 if QUICK else pilot.BATCH // 2
+STEPS = 2 if QUICK else pilot.EPOCHS * 84          # 840: 10 epochs of 84 batches of 64 images, as in the paper's runs
 LEARNT, GAP, RETAIN, DECODE_DROP = 0.75, 0.3, 0.80, 15.0
 TOL, MAX_ITER, RHO = 1e-7, 1000, 1.5           # robust PCA settings, as in the robust-PCA test
 N_LOC_QUICK, N_QUICK = 10, 16
-CKPT = OUT / "ckpt" if QUICK else S1.OUT / B / "ckpt"
-CONFIG = dict(quick=QUICK, backbone=B, seeds=SEEDS, splits=SPLITS, draws=DRAWS, ks=S1.KS, other_ks=OTHER_KS, c_lr=Q.C,
+CKPT = OUT / "ckpt" if QUICK else screen.OUT / B / "ckpt"
+CONFIG = dict(quick=QUICK, backbone=B, seeds=SEEDS, splits=SPLITS, draws=DRAWS, ks=screen.KS, other_ks=OTHER_KS, c_lr=corrected_pilot.C,
               pairs_per_species=PAIRS_PER_SPECIES, n_leaf=N_LEAF, n_coil=N_COIL, mix=(MIX_PER_SPECIES, MIX_PER_TYPE,
               MIX_PER_OBJECT), held=(N_HELD_PER_SPECIES, N_HELD_SYN), probe=N_PROBE, reserve_seed=RESERVE_SEED,
               lesion_area=LESION_AREA, vertices=VERTICES, radii=RADII, brightness=BRIGHT, channel=CHANNEL,
               feather=FEATHER, keep=KEEP, crop_tries=CROP_TRIES, patch_pos=PATCH_POS, patch_w=PATCH_W,
-              batch_pairs=BATCH_PAIRS, steps=STEPS, lr=P.LR, learnt=LEARNT, gap=GAP, retain=RETAIN,
+              batch_pairs=BATCH_PAIRS, steps=STEPS, lr=pilot.LR, learnt=LEARNT, gap=GAP, retain=RETAIN,
               decode_drop=DECODE_DROP, rpca=(TOL, MAX_ITER, RHO))
 
 
@@ -143,8 +146,8 @@ def manifest(step, task=None, **extra):
             versions[p] = metadata.version(p)
         except metadata.PackageNotFoundError:
             versions[p] = None
-    m = dict(step=step, task=task, code_version=E10.code_version(), script_sha256=sha256(__file__),
-             screen_sha256=sha256(S1.__file__), config=CONFIG, python=platform.python_version(), packages=versions,
+    m = dict(step=step, task=task, code_version=classifiers.code_version(), script_sha256=sha256(__file__),
+             screen_sha256=sha256(screen.__file__), config=CONFIG, python=platform.python_version(), packages=versions,
              host=platform.node(), gpu=torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
              slurm_job=os.environ.get("SLURM_JOB_ID"), slurm_array_task=os.environ.get("SLURM_ARRAY_TASK_ID"),
              finished=time.strftime("%Y-%m-%d %H:%M:%S"), **extra)
@@ -179,8 +182,8 @@ def synth_index(name):
 
 
 def visa_crop(p):
-    """A visa256 path's copy cropped to the object (S1._visa_crop)."""
-    return str(VISA / Path(p).relative_to(P.DATA / "visa256"))
+    """A visa256 path's copy cropped to the object (screen._visa_crop)."""
+    return str(VISA / Path(p).relative_to(pilot.DATA / "visa256"))
 
 
 def visa_mask(p):
@@ -208,8 +211,8 @@ def quota(sizes, n, rng):
 @functools.lru_cache(None)
 def plant_files():
     """PlantVillage's segmented leaves (B1's images), {class: sorted paths}."""
-    return {c: sorted(str(p) for p in (PV / c).iterdir() if p.suffix.lower() in S1.IMG_EXTS)
-            for c in S1._class_dirs(PV)}
+    return {c: sorted(str(p) for p in (PV / c).iterdir() if p.suffix.lower() in screen.IMG_EXTS)
+            for c in screen._class_dirs(PV)}
 
 
 def species(c):
@@ -302,7 +305,7 @@ def synth_bases(seed):
 
 def visa_table():
     """VisA (visa256) with object types, defect flags and the fixed held-out set of the abnormality-sources test."""
-    return S1._abnormality_table("visa_defect")
+    return screen._abnormality_table("visa_defect")
 
 
 def visa_pairs(rng, per_type, held=False):
@@ -383,8 +386,8 @@ def probe_items():
 
 # ---------------------------------------------------------------- synthetic lesions
 def object_mask(a):
-    import e5_lesion_like_sources as S18           # the blotch test's mask: border colour, opened, hole-filled
-    return S18.object_mask(a)
+    import lesion_like_sources as lesion_like           # the blotch test's mask: border colour, opened, hole-filled
+    return lesion_like.object_mask(a)
 
 
 def poisson(dst, src, mask):
@@ -488,8 +491,8 @@ def _lesion_job(job):
 
 
 def synth_set(name, bases, seed, fills=None):
-    """Lesioned copies of `bases` [(path, kind)] -> out_s45/synth/<name>/ (NNNN.png, NNNN_mask.png, index.csv). Each
-    lesion is filled from another image drawn from `fills` (the bases by default)."""
+    """Lesioned copies of `bases` [(path, kind)] -> outputs/synthetic_lesions/synth/<name>/ (NNNN.png, NNNN_mask.png,
+    index.csv). Each lesion is filled from another image drawn from `fills` (the bases by default)."""
     d = OUT / "synth" / name
     if (d / "index.csv").exists():
         print("exists:", d); return
@@ -503,7 +506,7 @@ def synth_set(name, bases, seed, fills=None):
             o = fills[rng.randrange(len(fills))]
         others.append(o)
     jobs = [(f, o, str(d / f"{i:04d}.png"), seed * 100000 + i) for i, ((f, _), o) in enumerate(zip(bases, others))]
-    with Pool(S1.cpus()) as pool:
+    with Pool(screen.cpus()) as pool:
         recs = pool.map(_lesion_job, jobs, chunksize=8)
     df = pd.DataFrame([dict(i=i, base=f, kind=k, other=o, lesioned=j[2], mask=mask_path(j[2]), **r)
                        for i, ((f, k), o, j, r) in enumerate(zip(bases, others, jobs, recs))])
@@ -531,7 +534,7 @@ def sheet(rows, dst):
 def _visa_mask(job):
     """Worker: crop one defective VisA photo's mask with the box that the defect-crop test computes from the photo,
     and resize it to the cropped photo's size (nearest). Returns the defect's share of the crop, or why it failed."""
-    import e5_defect_crop as DC
+    import defect_crop
     from PIL import Image, ImageOps
     src, dst = job
     img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
@@ -540,29 +543,30 @@ def _visa_mask(job):
     if m.size != (W, H):
         return "size"
     small = np.asarray(img.resize((max(1, W // 4), max(1, H // 4)), Image.BILINEAR), dtype=np.float64) / 255
-    b = DC.object_box(small)
+    b = defect_crop.object_box(small)
     if b is None:
         return "no box"
     s = W / small.shape[1]
     x0, y0, x1, y1 = (v * s for v in b)
-    side = min(max(x1 - x0, y1 - y0) * (1 + 2 * DC.MARGIN), W, H)
+    side = min(max(x1 - x0, y1 - y0) * (1 + 2 * defect_crop.MARGIN), W, H)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     x0, y0 = float(np.clip(cx - side / 2, 0, W - side)), float(np.clip(cy - side / 2, 0, H - side))
     out = np.asarray(m.crop((round(x0), round(y0), round(x0 + side), round(y0 + side)))
-                     .resize((DC.SIZE, DC.SIZE), Image.NEAREST)) > 0
+                     .resize((defect_crop.SIZE, defect_crop.SIZE), Image.NEAREST)) > 0
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(out.astype(np.uint8) * 255).save(dst)
     return float(out.mean())
 
 
 def visa_masks(only=None):
-    """VisA's defect masks, cropped like visa256crop's copies -> out_s45/visa_masks/<object>/1/<n>.png. `only` limits
-    them to those cropped photos (the smoke test's)."""
-    import e5_defect_crop as DC
-    idx = DC.originals()
+    """VisA's defect masks, cropped like visa256crop's copies ->
+    outputs/synthetic_lesions/visa_masks/<object>/1/<n>.png. `only` limits them to those cropped photos (the smoke
+    test's)."""
+    import defect_crop
+    idx = defect_crop.originals()
     rows = [r for r in idx[idx.label == 1].itertuples() if only is None or str(VISA / r.path) in only]
     jobs = [(r.src, visa_mask(str(VISA / r.path))) for r in rows]
-    with Pool(S1.cpus()) as pool:
+    with Pool(screen.cpus()) as pool:
         res = pool.map(_visa_mask, jobs, chunksize=8)
     bad = [x for x in res if isinstance(x, str)]
     share = np.array([x for x in res if not isinstance(x, str)])
@@ -605,7 +609,7 @@ def augment(img, box, flip):
     x = TF.resized_crop(img, *box, [224, 224])
     if flip:
         x = TF.hflip(x)
-    return TF.normalize(TF.to_tensor(x), P.MEAN, P.STD)
+    return TF.normalize(TF.to_tensor(x), pilot.MEAN, pilot.STD)
 
 
 def patch_targets(mask, box, flip):
@@ -766,8 +770,8 @@ def step_loss(m, heads, batch, kind, lam, dev):
 def scores(m, heads, paths, dev):
     """s(x) of each image at the evaluation crop (resize 224, centre crop)."""
     out = []
-    for x, _ in torch.utils.data.DataLoader(P.ImageList([(p, 0) for p in paths], P.EVAL_TF), batch_size=128,
-                                            num_workers=min(6, S1.cpus())):
+    for x, _ in torch.utils.data.DataLoader(pilot.ImageList([(p, 0) for p in paths], pilot.EVAL_TF), batch_size=128,
+                                            num_workers=min(6, screen.cpus())):
         out.append(heads.score(m.forward_features(x.to(dev))[:, 0]).squeeze(1).cpu())
     return torch.cat(out).numpy()
 
@@ -794,9 +798,9 @@ def train(task):
         print("exists:", ck); return
     t0 = time.time()
     kind, patch, source, adv = objective(fam)
-    P.seed_all(seed)
+    pilot.seed_all(seed)
     pairs = train_data(fam, seed)
-    workers = min(6, S1.cpus())
+    workers = min(6, screen.cpus())
     if fam == "unpaired_synth":
         dl = torch.utils.data.DataLoader(SingleSet(pairs), batch_sampler=SplitBatches(len(pairs), 2 * BATCH_PAIRS, seed),
                                          num_workers=workers, persistent_workers=True)
@@ -806,15 +810,15 @@ def train(task):
     assert QUICK or (len(pairs) == 2700 and len(dl) == 84), (len(pairs), len(dl))
     print(f"{fam} seed {seed}: {len(pairs)} pairs, objective {kind}, patch head {patch}, source head {source}, "
           f"adversarial {adv}", flush=True)
-    dev = P.device()
-    m = S1.imagenet_model(B)
-    trainable = tuple(f"blocks.{i}." for i in Q.VIT_TRAINED) + ("norm.",)
+    dev = pilot.device()
+    m = screen.imagenet_model(B)
+    trainable = tuple(f"blocks.{i}." for i in corrected_pilot.VIT_TRAINED) + ("norm.",)
     for n_, p in m.named_parameters():
         p.requires_grad = n_.startswith(trainable)
     heads = Heads(patch, source)
     m.to(dev), heads.to(dev)
     params = [p for p in m.parameters() if p.requires_grad] + list(heads.parameters())
-    opt = torch.optim.SGD(params, lr=P.LR, momentum=0.9, weight_decay=0.0)
+    opt = torch.optim.SGD(params, lr=pilot.LR, momentum=0.9, weight_decay=0.0)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, STEPS)
     log, done = [], 0
     while done < STEPS:
@@ -836,11 +840,11 @@ def train(task):
     for d in (ck.parent, heads_path(ck.stem).parent):
         d.mkdir(parents=True, exist_ok=True)
     torch.save(heads.state_dict(), heads_path(ck.stem))
-    json.dump(dict(backbone=B, source=fam, seed=seed, n=2 * len(pairs), pairs=len(pairs), steps=STEPS, lr=P.LR,
+    json.dump(dict(backbone=B, source=fam, seed=seed, n=2 * len(pairs), pairs=len(pairs), steps=STEPS, lr=pilot.LR,
                    objective=dict(loss=kind, patch=patch, source=source, adversarial=adv), log=log,
                    heldout_pair_acc=held, sec=round(time.time() - t0)), open(ck.with_suffix(".json"), "w"), indent=1)
     tmp = ck.with_suffix(".tmp")
-    torch.save({k: v.cpu() for k, v in m.state_dict().items() if not k.startswith("head.")}, tmp)   # as S1.train
+    torch.save({k: v.cpu() for k, v in m.state_dict().items() if not k.startswith("head.")}, tmp)   # as screen.train
     os.replace(tmp, ck)
     manifest("train", task, network=ck.stem, heldout_pair_acc=held, seconds=round(time.time() - t0))
 
@@ -867,7 +871,7 @@ def check():
         worst = max(worst, float(outside.max()) if outside.size else 0.0)
         frac = mc.reshape(GRID, 16, GRID, 16).mean((1, 3)).reshape(-1)
         assert np.array_equal(tgt.numpy() == 1, frac >= PATCH_POS), "patch targets differ from the mask"
-        img = Image.fromarray((np.clip(xb.numpy().transpose(1, 2, 0) * P.STD + P.MEAN, 0, 1) * 255).astype(np.uint8))
+        img = Image.fromarray((np.clip(xb.numpy().transpose(1, 2, 0) * pilot.STD + pilot.MEAN, 0, 1) * 255).astype(np.uint8))
         d = ImageDraw.Draw(img)
         for j in np.flatnonzero(tgt.numpy() == 1):
             y, x = divmod(int(j), GRID)
@@ -884,13 +888,13 @@ def check():
 
 # ---------------------------------------------------------------- features
 def net_build(c):
-    """A network as S1.build makes it. The smoke test's own networks load from its checkpoint folder."""
+    """A network as screen.build makes it. The smoke test's own networks load from its checkpoint folder."""
     if QUICK and c != "imagenet" and not c.startswith(BASE):
-        m = S1.imagenet_model(B)
+        m = screen.imagenet_model(B)
         missing, unexpected = m.load_state_dict(torch.load(CKPT / f"{c}.pt", map_location="cpu"), strict=False)
-        assert not unexpected and set(missing) == S1.head_keys(B), (missing, unexpected)
+        assert not unexpected and set(missing) == screen.head_keys(B), (missing, unexpected)
         return m
-    return S1.build(B, c)
+    return screen.build(B, c)
 
 
 def heads_of(c, dev):
@@ -901,18 +905,18 @@ def heads_of(c, dev):
 
 
 def norm(dev):
-    return (torch.tensor(v).view(1, 3, 1, 1).to(dev) for v in S1.norm_stats(B))
+    return (torch.tensor(v).view(1, 3, 1, 1).to(dev) for v in screen.norm_stats(B))
 
 
 @torch.no_grad()
 def quick_tests(m, c, dev):
-    """Smoke test: the readouts of the first N_QUICK images of each test, into out_s45/quick (the pipeline's folders
-    are not touched)."""
+    """Smoke test: the readouts of the first N_QUICK images of each test, into outputs/synthetic_lesions/quick (the
+    pipeline's folders are not touched)."""
     mean, std = norm(dev)
     for t in TESTS:
-        tab, ims = S1.load_target(t) if t in S1.TARGETS else S4.load_isic(t)
+        tab, ims = screen.load_target(t) if t in screen.TARGETS else credibility.load_isic(t)
         x = torch.from_numpy(np.array(ims[:N_QUICK])).to(dev).float().div_(255)
-        f = S1.stage_features(B, m, (x - mean) / std)
+        f = screen.stage_features(B, m, (x - mean) / std)
         assert set(f) == {"b6", "b9", "b12", "cls"} and all(v.shape == (N_QUICK, 384) for v in f.values())
         (OUT / "feats" / t).mkdir(parents=True, exist_ok=True)
         np.savez(OUT / "feats" / t / f"feats_{c}.npz", **{k: v.cpu().numpy().astype(np.float16) for k, v in f.items()},
@@ -922,12 +926,13 @@ def quick_tests(m, c, dev):
 @torch.no_grad()
 def tokens(m, c, dev):
     """The ISIC 2018 Task 1 images' final-block patch tokens after the final norm, as in the robust-PCA test
-    -> out_s45/tokens/<c>.npy, float16 (N, 196, 384). diagnose deletes them once localization is scored."""
+    -> outputs/synthetic_lesions/tokens/<c>.npy, float16 (N, 196, 384). diagnose deletes them once localization is
+    scored."""
     dst = OUT / "tokens" / f"{c}.npy"
     if dst.exists() or (OUT / "loc" / f"{c}.npz").exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tab, ims = S4.load_isic("isic_attr")
+    tab, ims = credibility.load_isic("isic_attr")
     mean, std = norm(dev)
     tmp = dst.with_suffix(".tmp.npy")
     arr = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float16, shape=(len(tab), GRID * GRID, 384))
@@ -941,16 +946,17 @@ def tokens(m, c, dev):
 
 @torch.no_grad()
 def probe_features(m, c, dev):
-    """The probe set's readouts (S1.stage_features) at the evaluation crop -> out_s45/probe/<c>.npz."""
+    """The probe set's readouts (screen.stage_features) at the evaluation crop ->
+    outputs/synthetic_lesions/probe/<c>.npz."""
     dst = OUT / "probe" / f"{c}.npz"
     if dst.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
     items = probe_items()
     feats = {}
-    for x, _ in torch.utils.data.DataLoader(P.ImageList([(p, 0) for p, _, _ in items], P.EVAL_TF), batch_size=128,
-                                            num_workers=min(6, S1.cpus())):
-        for k, v in S1.stage_features(B, m, x.to(dev)).items():
+    for x, _ in torch.utils.data.DataLoader(pilot.ImageList([(p, 0) for p, _, _ in items], pilot.EVAL_TF), batch_size=128,
+                                            num_workers=min(6, screen.cpus())):
+        for k, v in screen.stage_features(B, m, x.to(dev)).items():
             feats.setdefault(k, []).append(v.cpu().numpy().astype(np.float16))
     np.savez(dst.with_suffix(".tmp.npz"), **{k: np.concatenate(v) for k, v in feats.items()},
              source=np.array([s for _, s, _ in items]), abnormal=np.array([a for _, _, a in items]))
@@ -959,8 +965,9 @@ def probe_features(m, c, dev):
 
 @torch.no_grad()
 def attn_features(m, c, dev):
-    """The exploratory SP-attn readout on HAM10000 and ISIC -> out_s45/attn/<test>/feats_<c>.npz (key "attn"). It
-    pools the final-block patch tokens (after the final norm), weighted by the softmax of the patch head's scores."""
+    """The exploratory SP-attn readout on HAM10000 and ISIC -> outputs/synthetic_lesions/attn/<test>/feats_<c>.npz (key
+    "attn"). It pools the final-block patch tokens (after the final norm), weighted by the softmax of the patch head's
+    scores."""
     heads = heads_of(c, dev)
     mean, std = norm(dev)
     for t in ("ham", "isic_test"):
@@ -968,7 +975,7 @@ def attn_features(m, c, dev):
         if dst.exists():
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        tab, ims = S1.load_target(t) if t in S1.TARGETS else S4.load_isic(t)
+        tab, ims = screen.load_target(t) if t in screen.TARGETS else credibility.load_isic(t)
         n = N_QUICK if QUICK else len(tab)
         out = []
         for i in range(0, n, 256):
@@ -985,8 +992,8 @@ def features(task):
     t0 = time.time()
     if not QUICK:
         for t in TESTS:                                    # skips the files that exist (B0's and B1's, mostly)
-            S4.extract_conditions(B, t, [c])
-    dev = P.device()
+            credibility.extract_conditions(B, t, [c])
+    dev = pilot.device()
     m = net_build(c).eval().to(dev)
     if QUICK:
         quick_tests(m, c, dev)
@@ -1000,42 +1007,44 @@ def features(task):
 
 # ---------------------------------------------------------------- few-shot evaluation
 def preds_path(t, c):
-    """Where network c's predictions on target t go. HAM10000 and DDR use the pipeline's folder, the others out_s45."""
-    return (S1.OUT / B if t in S1.TARGETS else OUT / B) / t / f"preds_{c}.npz"
+    """Where network c's predictions on target t go. HAM10000 and DDR use the pipeline's folder, the others
+    outputs/synthetic_lesions."""
+    return (screen.OUT / B if t in screen.TARGETS else OUT / B) / t / f"preds_{c}.npz"
 
 
 def other_splits(t):
-    """HyperKvasir, PAD-UFES-20 and HIBA: labels, groups, classes and S1.make_splits with their k values."""
-    tab = pd.read_csv(S4.OUT / "cache" / f"{t}_index.csv")
+    """HyperKvasir, PAD-UFES-20 and HIBA: labels, groups, classes and screen.make_splits with their k values."""
+    tab = pd.read_csv(credibility.OUT / "cache" / f"{t}_index.csv")
     y, g = tab["y"].values, tab["group"].values
-    ks, S1.KS = S1.KS, OTHER_KS
+    ks, screen.KS = screen.KS, OTHER_KS
     try:
-        splits = S1.make_splits(y, g, int(y.max()) + 1)
+        splits = screen.make_splits(y, g, int(y.max()) + 1)
     finally:
-        S1.KS = ks
+        screen.KS = ks
     return y, g, int(y.max()) + 1, splits
 
 
 def evaluate_other(t, cs):
-    """S4.evaluate_conditions for the other targets, keeping the validation accuracies, into out_s45."""
+    """credibility.evaluate_conditions for the other targets, keeping the validation accuracies, into
+    outputs/synthetic_lesions."""
     from joblib import Parallel, delayed
     y, _, nc, splits = other_splits(t)
     splits = {sp: dict(splits[sp], shots={k: v[:DRAWS] for k, v in splits[sp]["shots"].items()}) for sp in SPLITS}
     todo = [c for c in cs if not preds_path(t, c).exists()]
-    jobs = [(c, r) for c in todo for r in S1.readouts(B)]
-    out = Parallel(n_jobs=S1.cpus(), verbose=1)(
-        delayed(S1._eval_job)(S4.target_dir(B, t) / f"feats_{c}.npz", B, c, r, splits, y, nc, OTHER_KS) for c, r in jobs)
+    jobs = [(c, r) for c in todo for r in screen.readouts(B)]
+    out = Parallel(n_jobs=screen.cpus(), verbose=1)(
+        delayed(screen._eval_job)(credibility.target_dir(B, t) / f"feats_{c}.npz", B, c, r, splits, y, nc, OTHER_KS) for c, r in jobs)
     per = {}
     for c, res in out:
         per.setdefault(c, {}).update(res)
     for c, res in per.items():
         for sp in SPLITS:
             res[f"split|{sp}|te"] = splits[sp]["te"]
-        E10.save(preds_path(t, c), res)
+        classifiers.save(preds_path(t, c), res)
 
 
 def attn_evaluate(c):
-    """Exploratory: SP with the attn readout beside the standard ones -> out_s45/attn/ext_<c>.npz.
+    """Exploratory: SP with the attn readout beside the standard ones -> outputs/synthetic_lesions/attn/ext_<c>.npz.
 
     Per split and k, the readout with the best mean HAM10000 validation accuracy wins, with ties going to the standard
     ones. ISIC is predicted from the HAM10000 shots at that readout. The keys are best|split|k (the predictions) and
@@ -1043,25 +1052,25 @@ def attn_evaluate(c):
     dst = OUT / "attn" / f"ext_{c}.npz"
     if dst.exists():
         return
-    tab, _ = S1.load_target("ham")
+    tab, _ = screen.load_target("ham")
     y, g = tab["y"].values, tab["group"].values
-    splits = S1.make_splits(y, g, 7)
+    splits = screen.make_splits(y, g, 7)
     fa = OUT / "attn" / "ham" / f"feats_{c}.npz"
-    _, res = S1._eval_job(fa, B, c, "attn", {sp: splits[sp] for sp in SPLITS}, y, 7, S1.KS)
-    std = np.load(S1.OUT / B / "ham" / f"preds_{c}.npz")
-    E = np.load(S4.OUT / B / "isic_test" / f"ext_{c}.npz")
+    _, res = screen._eval_job(fa, B, c, "attn", {sp: splits[sp] for sp in SPLITS}, y, 7, screen.KS)
+    std = np.load(screen.OUT / B / "ham" / f"preds_{c}.npz")
+    E = np.load(credibility.OUT / B / "isic_test" / f"ext_{c}.npz")
     Xh = np.load(fa)["attn"].astype(np.float32)
     Xe = np.load(OUT / "attn" / "isic_test" / f"feats_{c}.npz")["attn"].astype(np.float32)
     out = {}
     for sp in SPLITS:
-        for k in S1.KS:
-            cand = {r: std[f"{r}|{sp}|{k}|val_ba"].mean() for r in S1.readouts(B)}
+        for k in screen.KS:
+            cand = {r: std[f"{r}|{sp}|{k}|val_ba"].mean() for r in screen.readouts(B)}
             cand["attn"] = res[f"attn|{sp}|{k}|val_ba"].mean()
             won = max(cand, key=cand.get) == "attn"
             out[f"attn|{sp}|{k}"] = np.array(won)
-            out[f"best|{sp}|{k}"] = (np.stack([S4._fit_predict_ext(Xh[idx], y[idx], Xe, None)
+            out[f"best|{sp}|{k}"] = (np.stack([credibility._fit_predict_ext(Xh[idx], y[idx], Xe, None)
                                                for idx in splits[sp]["shots"][k]]) if won else E[f"best|{sp}|{k}"])
-    E10.save(dst, out)
+    classifiers.save(dst, out)
 
 
 def evaluate(task):
@@ -1071,8 +1080,8 @@ def evaluate(task):
         evaluate_other_quick(c)
     else:
         for t in ("ham", "ddr"):
-            S4.evaluate_conditions(B, t, [c])
-        S4.external(B, [c])                                # ISIC 2018 test, from the HAM10000 shots
+            credibility.evaluate_conditions(B, t, [c])
+        credibility.external(B, [c])                                # ISIC 2018 test, from the HAM10000 shots
         for t in OTHER:
             evaluate_other(t, [c])
         if family(c) == "pairs_synth_patch":
@@ -1082,7 +1091,7 @@ def evaluate(task):
 
 def evaluate_other_quick(c):
     for t in OTHER:
-        if (S4.target_dir(B, t) / f"feats_{c}.npz").exists():
+        if (credibility.target_dir(B, t) / f"feats_{c}.npz").exists():
             evaluate_other(t, [c])
         else:
             print(f"{t} {c}: no features yet (the full run extracts them)", flush=True)
@@ -1136,13 +1145,13 @@ def unpack(bits):
 
 def score_half():
     """The Task 1 images whose localization is scored (only the first N_LOC_QUICK in the smoke test)."""
-    idx = np.flatnonzero(~fit_half(len(S4.load_isic("isic_attr")[0])))
+    idx = np.flatnonzero(~fit_half(len(credibility.load_isic("isic_attr")[0])))
     return idx[:N_LOC_QUICK] if QUICK else idx
 
 
 def _loc_job(path, idx, mu, sd, w, b):
     T = np.load(path, mmap_mode="r")
-    masks = np.load(S41 / "masks_task1.npz")["mask"]
+    masks = np.load(ROBUST_PCA_OUT / "masks_task1.npz")["mask"]
     out = {"i": [], "v1": [], "patch": []}
     for i in idx:
         tok = np.asarray(T[i], np.float64)
@@ -1155,7 +1164,7 @@ def _loc_job(path, idx, mu, sd, w, b):
 
 
 def localize(c):
-    """Pixel AUROC per Task 1 score-half image -> out_s45/loc/<c>.npz.
+    """Pixel AUROC per Task 1 score-half image -> outputs/synthetic_lesions/loc/<c>.npz.
 
     Two maps are scored, both upsampled bilinearly to 224 px. V1 is the robust-PCA test's map (the norm of each
     token's sparse part) on the network's tokens, z-scored with their own fit-half statistics. The other is SP's patch
@@ -1174,8 +1183,8 @@ def localize(c):
         h = torch.load(heads_path(c), map_location="cpu")
         w, b = h["patch.weight"].numpy()[0].astype(np.float64), float(h["patch.bias"])
     idx = score_half()
-    parts = Parallel(n_jobs=S1.cpus())(delayed(_loc_job)(str(src), ch, mu, sd, w, b)
-                                       for ch in np.array_split(idx, min(len(idx), 8 * S1.cpus())))
+    parts = Parallel(n_jobs=screen.cpus())(delayed(_loc_job)(str(src), ch, mu, sd, w, b)
+                                       for ch in np.array_split(idx, min(len(idx), 8 * screen.cpus())))
     res = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
     dst.parent.mkdir(parents=True, exist_ok=True)
     np.savez(dst.with_suffix(".tmp.npz"), **res)
@@ -1183,7 +1192,7 @@ def localize(c):
     print(f"{c}: V1 mean AUROC {np.nanmean(res['v1']):.4f}" + ("" if w is None else
                                                                 f", patch head {np.nanmean(res['patch']):.4f}"), flush=True)
     if QUICK and c == "imagenet":                          # compare with the robust-PCA test's own scores
-        ref = np.load(S41 / "scores_task1.npz")
+        ref = np.load(ROBUST_PCA_OUT / "scores_task1.npz")
         old = dict(zip(ref["i"], ref["auc1"]))
         gap = max(abs(old[i] - v) for i, v in zip(res["i"], res["v1"]))
         print(f"V1 against the robust-PCA test's scores of the same {len(res['i'])} images: largest gap {gap:.2e}",
@@ -1209,7 +1218,7 @@ def decode(c):
         for tr, te in StratifiedKFold(5, shuffle=True, random_state=0).split(X, y):
             mu, sd = X[tr].mean(0), X[tr].std(0)
             sd[sd < 1e-8] = 1.0
-            p = LogisticRegression(C=Q.C, max_iter=3000).fit((X[tr] - mu) / sd, y[tr]).predict((X[te] - mu) / sd)
+            p = LogisticRegression(C=corrected_pilot.C, max_iter=3000).fit((X[tr] - mu) / sd, y[tr]).predict((X[te] - mu) / sd)
             accs.append(np.mean([(p[y[te] == k] == k).mean() for k in np.unique(y[te])]))
         out[r] = 100 * float(np.mean(accs))
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1218,7 +1227,8 @@ def decode(c):
 
 
 def standin(c):
-    """Linear-map retention, as the paper's stand-in (reweighting_test.standin) -> out_s45/standin/<c>.npz.
+    """Linear-map retention, as the paper's stand-in (reweighting_test.standin) ->
+    outputs/synthetic_lesions/standin/<c>.npz.
 
     A ridge map from ImageNet's all-layer features to the network's is fit on the unlabeled HAM10000 images, each side
     standardized with its HAM10000 statistics. The stand-in's features then go through the few-shot protocol on
@@ -1227,18 +1237,18 @@ def standin(c):
     if dst.exists():
         return
     tests = ("ham", "isic_test")
-    raw = {t: E9.load(B, t, "imagenet") for t in tests}
-    sx = E9.Std(raw["ham"])
+    raw = {t: reweighting.load(B, t, "imagenet") for t in tests}
+    sx = reweighting.Std(raw["ham"])
     X = {t: sx(v) for t, v in raw.items()}
-    raw = {t: E9.load(B, t, c) for t in tests}
-    sy = E9.Std(raw["ham"])
+    raw = {t: reweighting.load(B, t, c) for t in tests}
+    sy = reweighting.Std(raw["ham"])
     Y = {t: sy(v) for t, v in raw.items()}
-    A, c0, alpha = E9.ridge(X["ham"], Y["ham"])
-    T, ye = E9.skin_tests()
-    C, _ = E9.evaluate({"standin": {t: X[t] @ A + c0 for t in tests}}, B, T, ye)
+    A, c0, alpha = reweighting.ridge(X["ham"], Y["ham"])
+    T, ye = reweighting.skin_tests()
+    C, _ = reweighting.evaluate({"standin": {t: X[t] @ A + c0 for t in tests}}, B, T, ye)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    E10.save(dst, {k.replace("|standin|", "|"): v for k, v in C.items()} |
-             dict(alpha=np.array(alpha), r2_isic=np.array(E9.r2(Y["isic_test"], X["isic_test"] @ A + c0))))
+    classifiers.save(dst, {k.replace("|standin|", "|"): v for k, v in C.items()} |
+             dict(alpha=np.array(alpha), r2_isic=np.array(reweighting.r2(Y["isic_test"], X["isic_test"] @ A + c0))))
     print(f"{c}: stand-in fitted (ridge {alpha:g})", flush=True)
 
 
@@ -1282,9 +1292,9 @@ def t_interval(x):
     return mean, mean - q * se, mean + q * se, float(2 * stats.t.sf(abs(mean) / se, n - 1))
 
 
-class Boot45(E10.Boot40):
+class LesionBootWithDraws(classifiers.LesionBoot):
     def dist(self, diff):
-        """Boot40.gain's point estimate, with its bootstrap distribution and the seed x split cells."""
+        """LesionBoot.gain's point estimate, with its bootstrap distribution and the seed x split cells."""
         nt, ns = len(self.seeds), len(self.splits)
         G = np.empty((self.n_boot, nt, ns))
         cells = []
@@ -1305,33 +1315,33 @@ class Boot45(E10.Boot40):
 
 def test_data(t):
     """Test labels and resampling units per split, the number of classes and the k values. ISIC uses the same 1,512
-    images for every split, resampled by lesion (E10.isic_units)."""
+    images for every split, resampled by lesion (classifiers.isic_units)."""
     if t == "isic_test":
-        ye = S4.load_isic("isic_test")[0]["y"].values
-        u, _ = E10.isic_units()
-        return {sp: ye for sp in SPLITS}, {sp: u for sp in SPLITS}, 7, S1.KS
-    y, g, nc, splits = E10.target(t) if t in S1.TARGETS else other_splits(t)
+        ye = credibility.load_isic("isic_test")[0]["y"].values
+        u, _ = classifiers.isic_units()
+        return {sp: ye for sp in SPLITS}, {sp: u for sp in SPLITS}, 7, screen.KS
+    y, g, nc, splits = classifiers.target(t) if t in screen.TARGETS else other_splits(t)
     return ({sp: y[splits[sp]["te"]] for sp in SPLITS}, {sp: pd.factorize(g[splits[sp]["te"]])[0] for sp in SPLITS},
-            nc, S1.KS if t in S1.TARGETS else OTHER_KS)
+            nc, screen.KS if t in screen.TARGETS else OTHER_KS)
 
 
 def done(t, c):
-    return (S4.OUT / B / "isic_test" / f"ext_{c}.npz" if t == "isic_test" else preds_path(t, c)).exists()
+    return (credibility.OUT / B / "isic_test" / f"ext_{c}.npz" if t == "isic_test" else preds_path(t, c)).exists()
 
 
 def scored(t, c, yte, ks):
     """Per (split, k), the correctness (draws x test images) at the readout chosen on validation, and its mean
-    validation accuracy. ISIC uses S4.external's "best" predictions (at the readout chosen on HAM10000 validation) and
-    has no validation of its own."""
+    validation accuracy. ISIC uses credibility.external's "best" predictions (at the readout chosen on HAM10000
+    validation) and has no validation of its own."""
     if t == "isic_test":
-        E = np.load(S4.OUT / B / "isic_test" / f"ext_{c}.npz")
+        E = np.load(credibility.OUT / B / "isic_test" / f"ext_{c}.npz")
         return {(sp, k): E[f"best|{sp}|{k}"][:DRAWS] == yte[sp][None] for sp in SPLITS for k in ks}, None
     Z = np.load(preds_path(t, c))
     C, V = {}, {}
     for sp in SPLITS:
         for k in ks:
             assert len(Z[f"split|{sp}|te"]) == len(yte[sp])
-            r = max(S1.readouts(B), key=lambda r_: Z[f"{r_}|{sp}|{k}|val_ba"][:DRAWS].mean())
+            r = max(screen.readouts(B), key=lambda r_: Z[f"{r_}|{sp}|{k}|val_ba"][:DRAWS].mean())
             C[sp, k] = Z[f"{r}|{sp}|{k}|test_pred"][:DRAWS] == yte[sp][None]
             V[sp, k] = float(Z[f"{r}|{sp}|{k}|val_ba"][:DRAWS].mean())
     return C, V
@@ -1377,7 +1387,7 @@ class Scores:
         key = (t, tuple(seeds) if seeds else None)
         if key not in self.boots:
             yte, gidx, nc, _ = self.data[t]
-            self.boots[key] = Boot45(yte, gidx, nc, seeds=seeds, shared=t == "isic_test")
+            self.boots[key] = LesionBootWithDraws(yte, gidx, nc, seeds=seeds, shared=t == "isic_test")
         return self.boots[key]
 
     def compare(self, t, a, b, C_a=None):
@@ -1438,7 +1448,7 @@ def loc_file(fam, s):
 @functools.lru_cache(None)
 def center_prior():
     """Pixel AUROC per score-half image of a fixed map falling off with distance from the image centre."""
-    masks = np.load(S41 / "masks_task1.npz")["mask"]
+    masks = np.load(ROBUST_PCA_OUT / "masks_task1.npz")["mask"]
     yy, xx = np.mgrid[:224, :224]
     m = -np.hypot(yy - 111.5, xx - 111.5)
     idx = score_half()
@@ -1452,7 +1462,7 @@ def auc_compare(A, ref):
     D = A[:, ok] - ref[ok][None]
     rng = np.random.RandomState(0)
     bs = np.array([D[rng.randint(0, len(D), len(D))][:, rng.randint(0, D.shape[1], D.shape[1])].mean()
-                   for _ in range(Q.N_BOOT)])
+                   for _ in range(corrected_pilot.N_BOOT)])
     lo, hi = np.percentile(bs, [2.5, 97.5])
     _, tlo, thi, _ = t_interval(D.mean(1))
     wide_t = not np.isnan(tlo) and thi - tlo > hi - lo
@@ -1678,9 +1688,9 @@ def report(R, partial):
                                 "networks." if QUICK else "") + (" The first two tests only: the third has not run."
                                                                   if partial else ""),
          "Exploratory except the predictions and the gates, which were pre-registered.",
-         f"DINO ViT-S/16. Few-shot: frozen features, logistic regression (C = {Q.C}), k = {S1.KS} (HyperKvasir, "
+         f"DINO ViT-S/16. Few-shot: frozen features, logistic regression (C = {corrected_pilot.C}), k = {screen.KS} (HyperKvasir, "
          f"PAD-UFES-20 and HIBA {OTHER_KS}), {DRAWS} draws, {len(SPLITS)} grouped splits, balanced accuracy, mean over "
-         f"k. Intervals: 95%, the wider of the hierarchical bootstrap (ISIC resamples {E10.isic_units()[1]}) and a "
+         f"k. Intervals: 95%, the wider of the hierarchical bootstrap (ISIC resamples {classifiers.isic_units()[1]}) and a "
          "t-interval over seed means.", "",
          "1. Learnt check (held-out pair accuracy; needs >= 0.75 for every seed):\n", learn_txt, "",
          "2. Balanced accuracy (%), mean over seeds:\n",

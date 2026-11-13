@@ -8,8 +8,8 @@ few-shot protocol, re-run here.
 Steps, each run as its own SLURM job:
   extract --task i  plant and Food-101 images under the networks the maps need (CPU; i in 0-2)
   standin           the stand-in and its controls on HAM10000 -> ISIC, PAD-UFES-20, HIBA and BCN20000 (CPU)
-  summarize         -> pilot/out_s37/summary.txt (CPU)
-S37_QUICK=1 runs a smoke test (one seed, one split, two draws) into pilot/out_s37/quick.
+  summarize         -> outputs/reweighting_test/summary.txt (CPU)
+REWEIGHTING_QUICK=1 runs a smoke test (one seed, one split, two draws) into outputs/reweighting_test/quick.
 """
 import argparse
 import json
@@ -25,20 +25,20 @@ import pandas as pd
 
 for _d in sorted(Path(__file__).resolve().parents[1].glob("[1-9]_*")):   # the paper's nine experiments
     sys.path.insert(0, str(_d))
-import e1_pilot as P        # noqa: E402
-import e1_pilot2 as Q       # noqa: E402
-import source_screen as S1  # noqa: E402
-import e2_credibility as S4      # noqa: E402
-import e7_stronger_networks as S22    # noqa: E402
+import first_pilot as pilot  # noqa: E402
+import corrected_pilot  # noqa: E402
+import source_screen as screen  # noqa: E402
+import credibility_checks as credibility  # noqa: E402
+import stronger_networks as stronger  # noqa: E402
 from common import linear_map as _LM  # noqa: E402
 from common.heads import fit_predict_arrays as fit  # noqa: E402
 from common.linear_map import (RIDGE, Std, blocks, candidates, layers, load, r2, ridge,  # noqa: E402
                                spectrum)
 
-QUICK = os.environ.get("S37_QUICK") == "1"
-OUT = P.ROOT / "pilot" / "out_s37" / ("quick" if QUICK else "")
-SEEDS = S22.SEEDS[:1] if QUICK else S22.SEEDS
-SPLITS = S1.SPLITS[:1] if QUICK else S1.SPLITS
+QUICK = os.environ.get("REWEIGHTING_QUICK") == "1"
+OUT = pilot.ROOT / "outputs" / "reweighting_test" / ("quick" if QUICK else "")
+SEEDS = stronger.SEEDS[:1] if QUICK else stronger.SEEDS
+SPLITS = screen.SPLITS[:1] if QUICK else screen.SPLITS
 B = "vits_dino"
 TESTS = {"isic_test": "ISIC 2018 test", "ham": "HAM10000", "pad_ufes20": "PAD-UFES-20", "hiba_derm": "HIBA",
          "bcn20000": "BCN20000"}
@@ -55,7 +55,7 @@ class Skin:
     statistics."""
     def __init__(self, b=B):
         self.b = b
-        self.tests = [t for t in TESTS if (S4.target_dir(b, t) / "feats_imagenet.npz").exists()]
+        self.tests = [t for t in TESTS if (credibility.target_dir(b, t) / "feats_imagenet.npz").exists()]
         self.raw = {t: load(b, t, "imagenet") for t in self.tests}
         self.std = Std(self.raw["ham"])
         self.X = {t: self.std(v) for t, v in self.raw.items()}
@@ -71,9 +71,9 @@ def image_set(name, seed=0):
     """(items, labels): plant_disease2's training images of one seed (healthy 0 / diseased 1), or Food-101's source
     images of seed 0."""
     if name == "plant":
-        items, _ = S1.source_items("plant_disease2", random.Random(seed))
+        items, _ = screen.source_items("plant_disease2", random.Random(seed))
     else:
-        items, _ = S1.source_items("food", random.Random(0))
+        items, _ = screen.source_items("food", random.Random(0))
     return items, np.array([y for _, y in items])
 
 
@@ -85,7 +85,7 @@ def extract(task):
     Preprocessing is as for the targets' caches (224 px resize and centre crop)."""
     import torch
     from torchvision import transforms
-    torch.set_num_threads(max(1, S1.cpus() - 4))
+    torch.set_num_threads(max(1, screen.cpus() - 4))
     jobs = ([(B, "imagenet" if task == 0 else f"plant_disease2_s{s}", "plant", s) for s in SEEDS] if task < 2 else
             [(B, c, "food", 0) for c in ["imagenet"] + [f"plant_disease2_s{s}" for s in SEEDS]])
     tf = transforms.Compose([transforms.Resize(224), transforms.CenterCrop(224), transforms.PILToTensor()])
@@ -98,12 +98,12 @@ def extract(task):
         if QUICK:                                      # 64 images at random
             pick = sorted(random.Random(0).sample(range(len(items)), 64))
             items, y = [items[i] for i in pick], y[pick]
-        mean, std = (torch.tensor(v).view(1, 3, 1, 1) for v in S1.norm_stats(b))
-        m = S1.build(b, cond).eval()
+        mean, std = (torch.tensor(v).view(1, 3, 1, 1) for v in screen.norm_stats(b))
+        m = screen.build(b, cond).eval()
         feats = {}
         with torch.no_grad():
-            for x, _ in torch.utils.data.DataLoader(P.ImageList(list(items), tf), batch_size=64, num_workers=4):
-                for k, v in S1.stage_features(b, m, (x.float().div(255) - mean) / std).items():
+            for x, _ in torch.utils.data.DataLoader(pilot.ImageList(list(items), tf), batch_size=64, num_workers=4):
+                for k, v in screen.stage_features(b, m, (x.float().div(255) - mean) / std).items():
                     feats.setdefault(k, []).append(v.numpy().astype(np.float16))
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(path.with_suffix(".tmp.npz"), **{k: np.concatenate(v) for k, v in feats.items()}, y=y)
@@ -122,7 +122,7 @@ def _mel(Zh, Ze, b, y, split, ks, chosen, ye):
     import warnings
     warnings.filterwarnings("ignore")
     R, Re = candidates(Zh, b), candidates(Ze, b)
-    mel = S4.HAM_CLASSES.index("MEL")
+    mel = credibility.HAM_CLASSES.index("MEL")
     out = {}
     for k in ks:
         X, dims = R[chosen[k]]
@@ -231,7 +231,7 @@ def standin():
         todo.update({f"plant_disease2_s{s}": Y, f"standin_s{s}": stand})
         print(f"seed {s}: {len(sets)} sets scored", flush=True)
     jobs = [(n, sp) for n in todo for sp in SPLITS]
-    res = Parallel(n_jobs=S1.cpus())(
+    res = Parallel(n_jobs=screen.cpus())(
         delayed(_mel)(todo[n]["ham"], todo[n]["isic_test"], B, T["ham"]["y"], T["ham"]["splits"][sp], [5, 20, 50],
                       {k: chosen[f"ham|{n}|{sp}|{k}"] for k in [5, 20, 50]}, ye) for n, sp in jobs)
     mel = [dict(network=n, split=sp, k=k, sensitivity=v) for (n, sp), out in zip(jobs, res) for k, v in out.items()]
@@ -241,7 +241,7 @@ def standin():
 # ---------------------------------------------------------------- summary
 def merged():
     """The stand-in's correctness, {test label: {("s37", name): {(split, k): array}}}, with seedless sets copied to
-    every seed so that the stronger-networks helpers (S22) can pair them."""
+    every seed so that the stronger-networks helpers (stronger) can pair them."""
     Z = np.load(OUT / "correct_standin.npz")
     C = {}
     for key in Z.files:
@@ -264,25 +264,25 @@ def labels_saved(base, target):
 
 
 def summarize():
-    import e6_other_lesion_targets as G
+    import other_targets
     T, ye = skin_tests()
     C = merged()
     lab = TESTS
-    ks = {lab["isic_test"]: [5, 20, 50], lab["ham"]: [5, 20, 50], **{lab[t]: list(G.KS) for t in INTERNAL}}
-    yts = {lab["isic_test"]: {sp: ye for sp in S1.SPLITS}}
-    Bx = {lab["isic_test"]: S4._boot_ext(len(ye), ye, SEEDS)}
+    ks = {lab["isic_test"]: [5, 20, 50], lab["ham"]: [5, 20, 50], **{lab[t]: list(other_targets.KS) for t in INTERNAL}}
+    yts = {lab["isic_test"]: {sp: ye for sp in screen.SPLITS}}
+    Bx = {lab["isic_test"]: credibility._boot_ext(len(ye), ye, SEEDS)}
     for t in ["ham"] + INTERNAL:
-        yts[lab[t]] = {sp: T[t]["y"][T[t]["splits"][sp]["te"]] for sp in S1.SPLITS}
-        Bx[lab[t]] = S4.BootS(yts[lab[t]], {sp: pd.factorize(T[t]["g"][T[t]["splits"][sp]["te"]])[0]
-                                            for sp in S1.SPLITS}, T[t]["nc"], SEEDS)
+        yts[lab[t]] = {sp: T[t]["y"][T[t]["splits"][sp]["te"]] for sp in screen.SPLITS}
+        Bx[lab[t]] = credibility.BootS(yts[lab[t]], {sp: pd.factorize(T[t]["g"][T[t]["splits"][sp]["te"]])[0]
+                                            for sp in screen.SPLITS}, T[t]["nc"], SEEDS)
     nc = {k: int(max(v.max() for v in y.values())) + 1 for k, y in yts.items()}
     ISIC = lab["isic_test"]
 
     def level(a, test=ISIC, k=None):
-        return S22._ba(C[test], ("s37", a), yts[test], nc[test], k or ks[test])
+        return stronger._ba(C[test], ("s37", a), yts[test], nc[test], k or ks[test])
 
     gains = pd.DataFrame([dict(comparison=f"{a} - {b}", test=test,
-                               **S22._cmp(Bx[test], C[test], ("s37", a), ("s37", b), ks[test]))
+                               **stronger._cmp(Bx[test], C[test], ("s37", a), ("s37", b), ks[test]))
                           for a, b in CORE for test in C])
     gains["txt"] = [f"{r.gain:+.2f} [{r.lo:+.2f}, {r.hi:+.2f}]" for r in gains.itertuples()]
     get = lambda a, b="imagenet": gains[(gains.comparison == f"{a} - {b}") & (gains.test == ISIC)].iloc[0]
@@ -345,7 +345,7 @@ def _unit(Z, b, y, split, ks, nc, Ze=None, extra_all=False):
 def skin_tests():
     """Labels and splits: HAM10000 (k = 5/20/50; its shots are also tested on ISIC) and the internal skin tests."""
     T, ye = _LM.skin_tests(INTERNAL)
-    S1.KS = [5, 20, 50]                               # leaves the screen's k values at their default
+    screen.KS = [5, 20, 50]                               # leaves the screen's k values at their default
     return T, ye
 
 

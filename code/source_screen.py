@@ -1,6 +1,6 @@
 """Which source domains help which target domains, and does sharing low-level visual attributes predict it?
 
-This is the screen. Later experiments import it (as S1) and train their sources with train(), so those
+This is the screen. Later experiments import it (as screen) and train their sources with train(), so those
 sources are defined here as well.
 
 Sources (intermediate training, size-matched to DTD, 3 seeds each):
@@ -53,8 +53,8 @@ from PIL import Image, ImageFilter
 
 for _d in sorted(Path(__file__).resolve().parents[1].glob("[1-9]_*")):   # the paper's nine experiments
     sys.path.insert(0, str(_d))
-import e1_pilot as P   # noqa: E402
-import e1_pilot2 as Q  # noqa: E402
+import first_pilot as pilot  # noqa: E402
+import corrected_pilot  # noqa: E402
 from common import backbones as _B, bootstrap as _BS, data as _D, features as _F, fewshot as _FS, heads as _H  # noqa: E402
 from common import splits as _SP  # noqa: E402
 from common.backbones import (CLIP_MEAN, CLIP_STD, MICRO, RES, ctrl, family, head_keys, hf_clip_vision,  # noqa: E402
@@ -64,8 +64,8 @@ from common.data import CXR_CLASSES, CXR_MAX, TARGETS, cpus, n_classes, target_t
 from common.fewshot import eval_job as _eval_job  # noqa: E402
 from common.heads import readout  # noqa: E402
 
-OUT = P.ROOT / "pilot" / "out_s1"
-DATA = P.DATA
+OUT = pilot.ROOT / "outputs" / "source_screen"
+DATA = pilot.DATA
 MAIN_SOURCES = ["plant", "food", "histo", "dtd"]
 ABLATIONS = ["plant_gray", "plant_blur", "plant_shuf"]   # PlantVillage without colour / fine dots / leaf shape
 EDGE_CONTROLS = ["plant_grid", "plant_gridshuf"]         # tile borders with / without shuffling (DINO ViT-S only)
@@ -87,7 +87,7 @@ PLANT_DIV = {"plant_div2": ["Tomato", "Corn_(maize)"],
              "plant_div8": ["Tomato", "Corn_(maize)", "Apple", "Pepper,_bell", "Cherry_(including_sour)", "Grape",
                             "Strawberry", "Peach"]}
 N_DIV = 3600                               # the largest size at which plant_div2 can be balanced (Corn: 1,162 healthy)
-STAGE12_SOURCES = ["histo_cancer", "histo_arbitrary2"] + list(PLANT_DIV) + ["pool_abnormal", "pool_identity"]
+WHY_TRANSFER_SOURCES = ["histo_cancer", "histo_arbitrary2"] + list(PLANT_DIV) + ["pool_abnormal", "pool_identity"]
 # The source-size test trains on PlantVillage healthy vs diseased at six sizes, with the
 # natural class mix, nested within seed. The "_840steps" variants train for 840 steps whatever the size.
 SIZE_N = [1350, 2700, 5400, 10800, 21600, 43200]
@@ -95,21 +95,21 @@ SIZE_SOURCES = [f"plant_n{n}" for n in SIZE_N] + [f"plant_n{n}_840steps" for n i
 # The lesion-like-sources test uses sources with lesion-like marks but no plants.
 # MatsyaDx-BD fish photos, cropped to the fish, are labelled skin disease vs healthy or by species on the same images.
 # COIL-100 gets painted blotches.
-STAGE18_SOURCES = ["fish_disease", "fish_species", "coil_blotch"]
+LESION_LIKE_SOURCES = ["fish_disease", "fish_species", "coil_blotch"]
 N_FISH = 1350                              # the smallest size with the full gain in the source-size test
 # The second-leaf-dataset test uses a second leaf-disease dataset
 # (Chouhan et al. 2019), labelled diseased vs healthy or by species on the same images.
-STAGE19_SOURCES = ["leaf_disease", "leaf_species"]
+SECOND_LEAF_SOURCES = ["leaf_disease", "leaf_species"]
 N_LEAF = 1350
 # The leaf-crop test uses leaf_disease's images per seed, cropped so the leaf fills the
 # frame.
-STAGE20_SOURCES = ["leaf_disease_crop"]
+LEAF_CROP_SOURCES = ["leaf_disease_crop"]
 # The defect-crop test, on framing beyond plants, uses visa_defect's images per seed,
 # cropped so the objects fill the frame.
-STAGE21_SOURCES = ["visa_defect_crop"]
+DEFECT_CROP_SOURCES = ["visa_defect_crop"]
 # A lighter plant training for the unlabeled-skin test, meant to keep more of
 # ImageNet's features. It uses plant_disease2's images and steps at a tenth of the learning rate.
-STAGE26_SOURCES = ["plant_disease2_lite"]
+LIGHT_PLANT_SOURCES = ["plant_disease2_lite"]
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 SOURCES = MAIN_SOURCES + ABLATIONS + EDGE_CONTROLS + OBJECT_CONTROLS + LABEL_CONTROLS
 BACKBONES = ["rn50_sup", "rn50_dino", "vits_sup", "vits_dino"]
@@ -124,7 +124,7 @@ DTD_EXCLUDE = ["freckled", "veined"]       # mostly human skin / leaves (checked
 N_SOURCE = 45 * 120                         # DTD's size after the exclusion. Every source is sampled to this size.
 N_ATTR = 1500                               # images per dataset for the hand-crafted attribute features
 N_INET = 3000                               # images per dataset for the ImageNet-feature Frechet distance
-EPOCHS, BATCH, LR = P.EPOCHS, P.BATCH, P.LR
+EPOCHS, BATCH, LR = pilot.EPOCHS, pilot.BATCH, pilot.LR
 
 
 # ---------------------------------------------------------------- backbones
@@ -374,7 +374,7 @@ def heldout_items(source, items=None, seed=0):
         pick = r.sample(rest, min(1000, len(rest)))
         hit = set(r.sample(range(len(pick)), len(pick) // 2))
         return [(str(DATA / "coil100_blotch" / p.name), 1) if i in hit else (str(p), 0) for i, p in enumerate(pick)]
-    if source in STAGE12_SOURCES + ["histo"] and items is not None:
+    if source in WHY_TRANSFER_SOURCES + ["histo"] and items is not None:
         used = {f for f, _ in items}
         extra = [(f, y) for f, y in source_items(source, random.Random(100000 + seed))[0] if f not in used]
         return random.Random(7).sample(extra, min(1000, len(extra)))
@@ -479,7 +479,7 @@ def train(b, source, seed, steps=None, ckpt_dir=None):
     ck = (ckpt_dir or OUT / b / "ckpt") / f"{source}_s{seed}.pt"
     if ck.exists():
         print("exists:", ck); return
-    P.seed_all(seed)
+    pilot.seed_all(seed)
     rng = random.Random(seed)
     items, classes = source_items(source, rng)
     print(f"{b} {source} seed {seed}: {len(items)} images, {len(classes)} classes", flush=True)
@@ -487,15 +487,15 @@ def train(b, source, seed, steps=None, ckpt_dir=None):
     train_tf, eval_tf = transforms_at(b)
     tf = (transforms.Compose([ABLATION_OPS[source], *train_tf.transforms]) if source in ABLATION_OPS
           else train_tf)
-    if norm_stats(b) != (P.MEAN, P.STD):           # CLIP networks: their own normalisation, as when features are read
+    if norm_stats(b) != (pilot.MEAN, pilot.STD):  # CLIP networks: their own normalisation, as when features are read
         tf = transforms.Compose([*tf.transforms[:-1], transforms.Normalize(*norm_stats(b))])
-    dl = torch.utils.data.DataLoader(P.ImageList(items, tf), batch_size=BATCH, shuffle=True,
+    dl = torch.utils.data.DataLoader(pilot.ImageList(items, tf), batch_size=BATCH, shuffle=True,
                                      num_workers=min(6, cpus()), drop_last=True, persistent_workers=True)
-    dev = P.device()
+    dev = pilot.device()
     m = imagenet_model(b)
     if is_vit(b):
         m.reset_classifier(len(classes))
-        half = range(12, 24) if b.startswith("vitl") else Q.VIT_TRAINED    # the second half of the blocks
+        half = range(12, 24) if b.startswith("vitl") else corrected_pilot.VIT_TRAINED    # the second half of the blocks
         trainable = tuple(f"blocks.{i}." for i in half) + ("norm.", "head.")
         for n, p in m.named_parameters():
             p.requires_grad = n.startswith(trainable)
@@ -507,10 +507,10 @@ def train(b, source, seed, steps=None, ckpt_dir=None):
         for name in frozen_mods:
             for p in getattr(m, name).parameters():
                 p.requires_grad = False
-        wd, clip = P.WD, None
+        wd, clip = pilot.WD, None
     m.to(dev)
     params = [p for p in m.parameters() if p.requires_grad]
-    lr = LR / 10 if source in STAGE26_SOURCES else LR
+    lr = LR / 10 if source in LIGHT_PLANT_SOURCES else LR
     opt = torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=wd)
     steps = steps or fixed_steps(source) or EPOCHS * len(dl)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
@@ -551,7 +551,7 @@ def train(b, source, seed, steps=None, ckpt_dir=None):
         m.eval()
         pred = []
         with torch.no_grad():
-            for x, _ in torch.utils.data.DataLoader(P.ImageList(held, eval_tf), batch_size=128,
+            for x, _ in torch.utils.data.DataLoader(pilot.ImageList(held, eval_tf), batch_size=128,
                                                     num_workers=min(6, cpus())):
                 pred.append(m(x.to(dev)).argmax(1).cpu())
         pred, yh = torch.cat(pred).numpy(), np.array([y for _, y in held])
@@ -674,9 +674,9 @@ def attributes():
     res["attr_nocolour"] = sym_distances(names, lambda a, b: frechet(z[a][:, nocol], z[b][:, nocol]))
     res["attr_means"] = {nm: dict(zip(ATTR_NAMES, feats[nm].mean(0).tolist())) for nm in names}
     # Overall similarity: supervised ResNet-50 ImageNet features (global-pooled layer4).
-    dev = P.device()
+    dev = pilot.device()
     m = imagenet_model("rn50_sup").eval().to(dev)
-    mean = torch.tensor(P.MEAN).view(1, 3, 1, 1).to(dev); std = torch.tensor(P.STD).view(1, 3, 1, 1).to(dev)
+    mean = torch.tensor(pilot.MEAN).view(1, 3, 1, 1).to(dev); std = torch.tensor(pilot.STD).view(1, 3, 1, 1).to(dev)
     inet = {}
     for nm in names:
         imgs = dataset_images(nm, N_INET, seed=1)
@@ -974,7 +974,7 @@ def extract(b, t):
 
 
 def make_splits(y, g, nc):
-    return _SP.make_splits(y, g, nc, SPLITS, KS, REPEATS, P.TEST_FRAC)
+    return _SP.make_splits(y, g, nc, SPLITS, KS, REPEATS, pilot.TEST_FRAC)
 
 
 def evaluate(b, t):
@@ -999,7 +999,7 @@ def _full_job(path, b, splits, y):
     for sp, split in splits.items():
         pool = np.concatenate([split["itr"], split["val"]])
         mu, sd, scale = _H.shot_scaling(X[pool], dims)
-        clf = LogisticRegression(C=Q.C, max_iter=3000, class_weight="balanced").fit((X[pool] - mu) / sd * scale, y[pool])
+        clf = LogisticRegression(C=corrected_pilot.C, max_iter=3000, class_weight="balanced").fit((X[pool] - mu) / sd * scale, y[pool])
         out[str(sp)] = clf.predict((X[split["te"]] - mu) / sd * scale).astype(np.int8)
     return out
 
