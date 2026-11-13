@@ -27,7 +27,7 @@ for _d in sorted(Path(__file__).resolve().parents[1].glob("[1-9]_*")):   # the p
     sys.path.insert(0, str(_d))
 import e1_pilot as P        # noqa: E402
 import e1_pilot2 as Q       # noqa: E402
-import e1_screen as S1      # noqa: E402
+import source_screen as S1  # noqa: E402
 import e2_credibility as S4      # noqa: E402
 import e7_stronger_networks as S22    # noqa: E402
 from common import linear_map as _LM  # noqa: E402
@@ -241,7 +241,7 @@ def standin():
 # ---------------------------------------------------------------- summary
 def merged():
     """The stand-in's correctness, {test label: {("s37", name): {(split, k): array}}}, with seedless sets copied to
-    every seed so that the helpers of e7_stronger_networks.py (S22) can pair them."""
+    every seed so that the stronger-networks helpers (S22) can pair them."""
     Z = np.load(OUT / "correct_standin.npz")
     C = {}
     for key in Z.files:

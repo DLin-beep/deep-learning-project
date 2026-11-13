@@ -28,7 +28,7 @@ import pandas as pd
 for _d in sorted(Path(__file__).resolve().parents[1].glob("[1-9]_*")):   # the paper's nine experiments
     sys.path.insert(0, str(_d))
 import e1_pilot as P        # noqa: E402
-import e1_screen as S1      # noqa: E402
+import source_screen as S1  # noqa: E402
 import e2_credibility as S4      # noqa: E402
 import e7_stronger_networks as S22    # noqa: E402
 import e6_other_lesion_targets as G   # noqa: E402

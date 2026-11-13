@@ -129,11 +129,11 @@ episodes per target and shot.
 
 | Part | File |
 |---|---|
-| Sources, source training, few-shot evaluation and attribute distance | `code/e1_screen.py` |
-| The confirmatory test on BCN20000 | `code/e2_confirmatory_bcn20000.py` |
-| The label-free linear map | `code/e9_linear_stand_in.py` |
-| Synthetic lesions and synthetic-pair training | `code/e15_pointing.py` |
-| The benchmark | `code/e16_adaptation.py` |
+| Sources, source training, few-shot evaluation and attribute distance | `code/source_screen.py` |
+| The confirmatory test on BCN20000 | `code/confirmatory_test.py` |
+| The label-free linear map | `code/reweighting_test.py` |
+| Synthetic lesions and synthetic-pair training | `code/synthetic_lesions.py` |
+| The benchmark | `code/benchmark.py` |
 | Networks and their readouts, datasets, few-shot classifiers, the bootstrap, the linear map and the benchmark's episodes | `code/common/` |
 
 The paper's other checks, such as the attribute probes, cropping and the larger networks, are in our full codebase.

@@ -34,11 +34,11 @@ reading rather than running as they are.
 | `METHOD.md` | Our method, step by step |
 | `DATA.md` | Every dataset and network that we used, where it comes from and its license |
 | `figures/` | The paper's four figures |
-| `code/e1_screen.py` | Trains each network on a source, tests it few-shot on each target, and measures the attribute distance between datasets |
-| `code/e15_pointing.py` | Makes the synthetic lesions and trains a network to score each lesioned image above its clean copy |
-| `code/e16_adaptation.py` | Trains the synthetic-lesion network on COIL-100 and adapts it to the BSCD-FSL benchmark with a linear probe, LoRA or full fine-tuning |
-| `code/e9_linear_stand_in.py` | Tests whether plant training only reweights the features that the network already has, with a linear map fit without labels |
-| `code/e2_confirmatory_bcn20000.py` | Tests the five claims that we fixed in advance on BCN20000, a skin dataset that we had not used before |
+| `code/source_screen.py` | Trains each network on a source, tests it few-shot on each target, and measures the attribute distance between datasets |
+| `code/synthetic_lesions.py` | Makes the synthetic lesions and trains a network to score each lesioned image above its clean copy |
+| `code/benchmark.py` | Trains the synthetic-lesion network on COIL-100 and adapts it to the BSCD-FSL benchmark with a linear probe, LoRA or full fine-tuning |
+| `code/reweighting_test.py` | Tests whether plant training only reweights the features that the network already has, with a linear map fit without labels |
+| `code/confirmatory_test.py` | Tests the five claims that we fixed in advance on BCN20000, a skin dataset that we had not used before |
 | `code/common/` | Shared helpers for the networks and their readouts, the datasets, the few-shot classifiers and their evaluation, the hierarchical bootstrap, the linear map and the benchmark's episodes |
 | `requirements.txt` | The package versions that we used |
 

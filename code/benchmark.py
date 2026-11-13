@@ -4,7 +4,7 @@ The first round trains the COIL-100 networks and runs their checks. From develop
 committed before any run. DINO ViT-S/16 throughout.
   plain   ImageNet DINO (the condition "imagenet")
   ours    plain trained further on synthetic lesion pairs made from COIL-100 views only (pairs_coil_s0-5). It uses the
-          pointing experiment's lesion generator v1 and pair loss (e15_pointing.py) with the paper's recipe: blocks
+          pointing experiment's lesion generator v1 and pair loss (synthetic_lesions.py) with the paper's recipe: blocks
           7-12 and the final norm, SGD 0.01, momentum 0.9, no weight decay, clipping at 1, cosine over 840 steps of 32
           pairs. Each seed uses 2,700 views and never a PlantVillage image.
 Methods, all under fp16 autocast on the GPU:
@@ -16,7 +16,7 @@ and CropDisease. Development runs on plain only, on episodes of PAD-UFES-20 (ski
 (general, for the other targets). Ours runs with plain's choices. Nothing is tuned or chosen on a target.
 PAD-UFES-20 is never reported as a result. The go/no-go check compares plain and ours under full fine-tuning, on 600
 new 5-shot episodes each of PAD-UFES-20 and CUB. The final grid runs once, with full fine-tuning as the headline
-method. The fourth method, REAP's source stage and frozen test, runs in e16_reap.py. Protocol C, the paper's
+method. The fourth method, REAP's source stage and frozen test, runs in a separate REAP script in our full codebase. Protocol C, the paper's
 linear-probe tests, runs only in the first round.
 Steps, each run as its own SLURM job:
   First round
@@ -35,7 +35,7 @@ Steps, each run as its own SLURM job:
   gonogo_summary       -> gonogo.csv and gonogo.txt (CPU)
   final_a --task i     one network x target x shot: lp, lora and ft as chosen (GPU; FINAL_A_TASKS)
   summarize            -> protocol_a.csv, leaderboard.csv (against docs/leaderboard.md), verdict.json and summary.txt,
-                       with REAP's rows from reap/reap.csv once e16_reap.py has written it (CPU)
+                       with REAP's rows from reap/reap.csv once the REAP script has written it (CPU)
 Checkpoints, features and predictions on HAM10000, DDR and ISIC go where the pipeline keeps them (S1.OUT, S4.OUT).
 Everything else goes to pilot/out_s46. E16_QUICK=1 runs a smoke test into pilot/out_s46/quick.
 """
@@ -65,12 +65,12 @@ for _d in ([_PILOT.parent] + sorted((_PILOT.parent / "archive" / "paper-v1").glo
 QUICK = os.environ.get("E16_QUICK") == "1"
 import e1_pilot as P        # noqa: E402
 import e1_pilot2 as Q       # noqa: E402
-import e1_screen as S1      # noqa: E402
+import source_screen as S1  # noqa: E402
 import e2_credibility as S4      # noqa: E402
 import e4_pilot_finetune as FT   # noqa: E402  (Head, fit_head, augment, the recipe's constants, gpu_setup)
 import e4_finetune_all as S2     # noqa: E402  (Net, chosen_readout)
 import e10_classifiers as E10    # noqa: E402  (code_version, save, target, isic_units)
-import e15_pointing as E15       # noqa: E402  (the lesion generator, PairSet, Heads, step_loss, the reserved images,
+import synthetic_lesions as E15  # noqa: E402  (the lesion generator, PairSet, Heads, step_loss, the reserved images,
 #                                              other_splits, Boot45, t_interval, level)
 
 OUT = P.ROOT / "pilot" / "out_s46" / ("quick" if QUICK else "")
@@ -133,7 +133,7 @@ def sha256(path):
 
 
 def manifest(step, task=None, **extra):
-    """The code version, the hashes of this file and of e1_screen.py, the configuration and the environment, saved with
+    """The code version, the hashes of this file and of source_screen.py, the configuration and the environment, saved with
     every output."""
     from importlib import metadata
     versions = {}
@@ -945,7 +945,7 @@ def leaderboard(A):
 
 def summarize():
     """The final grid's tables and the plan's verdicts: protocol_a.csv (every cell), leaderboard.csv, verdict.json and
-    summary.txt. summary.txt also shows REAP's source stage and frozen test from reap/reap.csv, once e16_reap.py has
+    summary.txt. summary.txt also shows REAP's source stage and frozen test from reap/reap.csv, once the REAP script has
     written it."""
     ours = ["imagenet", "imagenet"] if QUICK else [f"{FAM}_s{s}" for s in SEEDS]   # the smoke test: plain as both
     A = summarize_a(ours)

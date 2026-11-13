@@ -16,7 +16,7 @@ Backbones (all ImageNet-1k): rn50_sup (supervised ResNet-50), rn50_dino (DINO Re
   vits_sup (supervised ViT-S/16, DeiT-S), vits_dino (DINO ViT-S/16).
 
 For every backbone x target, the ImageNet-only network, every source run and each run's normalisation-only control
-are evaluated as in the corrected pilot (e1_pilot2.py). The control keeps the ImageNet weights but takes the source
+are evaluated as in our corrected pilot. The control keeps the ImageNet weights but takes the source
 run's BatchNorm running statistics of layer3/4 (ResNets) or LayerNorm affine of blocks 7-12 (ViTs). The evaluation
 uses 5 grouped splits, k = 5/20/50 shots x 20 draws, the readout chosen on validation and a hierarchical bootstrap.
 
@@ -76,7 +76,7 @@ LABEL_CONTROLS = ["plant_species", "plant_disease2"]     # PlantVillage images, 
 # The abnormality-sources test uses abnormality vs identity labels on the same
 # images of two non-leaf datasets, VisA (12 inspected object types) and FruitNet (6 fruits).
 ABNORMALITY_SOURCES = ["visa_defect", "visa_object", "fruit_quality", "fruit_type"]
-CROP_SOURCES = ["fruit_quality_crop", "fruit_type_crop"]  # FruitNet cropped to the fruit (e5_fruit_crop.py)
+CROP_SOURCES = ["fruit_quality_crop", "fruit_type_crop"]  # FruitNet cropped to the fruit
 ABNORMAL_LABELS = ["visa_defect", "fruit_quality", "fruit_quality_crop"]  # the others are identity labels
 # The why-sources-transfer test asks which property of a source carries the
 # transfer.
@@ -217,7 +217,7 @@ ABLATION_OPS = {"plant_gray": Gray(), "plant_blur": Blur(), "plant_shuf": TileSh
 
 
 def _abnormality_table(source):
-    """The index written by e5_prepare_abnormality_sources.py (256 px images). Each image has its group (object type
+    """The index written when the abnormality sources were prepared (256 px images). Each image has its group (object type
     or fruit), whether it is abnormal (defective / bad quality) and whether it is in the fixed held-out set."""
     if source.startswith("visa"):
         root = DATA / "visa256"
@@ -309,12 +309,12 @@ def _leaf_table():
 
 
 def _leaf_crop(items):
-    """The same leaf images, from the copies cropped to the leaf (the leaf-crop test, e5_leaf_crop.py)."""
+    """The same leaf images, from the copies cropped to the leaf (the leaf-crop test)."""
     return [(str(DATA / "leaf256crop" / Path(f).name), y) for f, y in items]
 
 
 def _visa_crop(items):
-    """The same VisA images, from the copies cropped to their objects (the defect-crop test, e5_defect_crop.py)."""
+    """The same VisA images, from the copies cropped to their objects (the defect-crop test)."""
     return [(str(DATA / "visa256crop" / Path(f).relative_to(DATA / "visa256")), y) for f, y in items]
 
 

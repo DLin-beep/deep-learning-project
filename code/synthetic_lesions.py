@@ -73,9 +73,9 @@ if QUICK:
     os.environ["S37_QUICK"] = "1"              # the linear stand-in's helpers also run one split, two draws
 import e1_pilot as P        # noqa: E402
 import e1_pilot2 as Q       # noqa: E402
-import e1_screen as S1      # noqa: E402
+import source_screen as S1  # noqa: E402
 import e2_credibility as S4      # noqa: E402
-import e9_linear_stand_in as E9  # noqa: E402  (Std, load, ridge, r2, skin_tests, evaluate)
+import reweighting_test as E9  # noqa: E402  (Std, load, ridge, r2, skin_tests, evaluate)
 import e10_classifiers as E10    # noqa: E402  (code_version, isic_units, target, save, Boot40)
 
 OUT = P.ROOT / "pilot" / "out_s45" / ("quick" if QUICK else "")
@@ -134,7 +134,7 @@ def sha256(path):
 
 
 def manifest(step, task=None, **extra):
-    """Save the code version, the hashes of this file and of e1_screen.py, the configuration and the environment with
+    """Save the code version, the hashes of this file and of source_screen.py, the configuration and the environment with
     every output, in OUT/manifests/<step>_<task>.json."""
     from importlib import metadata
     versions = {}
@@ -529,7 +529,7 @@ def sheet(rows, dst):
 
 
 def _visa_mask(job):
-    """Worker: crop one defective VisA photo's mask with the box e5_defect_crop._crop_visa computes from the photo,
+    """Worker: crop one defective VisA photo's mask with the box that the defect-crop test computes from the photo,
     and resize it to the cropped photo's size (nearest). Returns the defect's share of the crop, or why it failed."""
     import e5_defect_crop as DC
     from PIL import Image, ImageOps
@@ -1218,7 +1218,7 @@ def decode(c):
 
 
 def standin(c):
-    """Linear-map retention, as the paper's stand-in (e9_linear_stand_in.standin) -> out_s45/standin/<c>.npz.
+    """Linear-map retention, as the paper's stand-in (reweighting_test.standin) -> out_s45/standin/<c>.npz.
 
     A ridge map from ImageNet's all-layer features to the network's is fit on the unlabeled HAM10000 images, each side
     standardized with its HAM10000 statistics. The stand-in's features then go through the few-shot protocol on
@@ -1255,12 +1255,12 @@ def diagnose(task):
 # ---------------------------------------------------------------- scoring
 def boot_p(bs):
     """Two-sided bootstrap p-value, the smallest alpha at which the percentile interval excludes 0 (as
-    e2_robustness.boot_p)."""
+    the robustness checks' boot_p)."""
     return float(min(1.0, 2 * max(min((bs <= 0).mean(), (bs >= 0).mean()), 0.5 / len(bs))))
 
 
 def holm(p):
-    """Holm-adjusted p-values (e2_robustness.holm)."""
+    """Holm-adjusted p-values (as in the robustness checks)."""
     p = np.asarray(p, float)
     o, m = np.argsort(p), len(p)
     adj = np.empty(m)
